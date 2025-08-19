@@ -101,7 +101,7 @@ fn parse_expr_impl<T: Iterator<Item = Token>>(tokens: &mut Peekable<T>) -> Resul
 
 pub fn parse_expr(input: &str) -> Result<Value> {
     let mut tokens = lexer::lex(input)
-        .map_err(|()| ParserError::Lexer)?
+        .map_err(ParserError::Lexer)?
         .into_iter()
         .peekable();
     let value = parse_expr_impl(&mut tokens)?;
@@ -111,7 +111,7 @@ pub fn parse_expr(input: &str) -> Result<Value> {
 
 pub fn parse_exprs(input: &str) -> Result<Vec<Value>> {
     let mut tokens = lexer::lex(input)
-        .map_err(|()| ParserError::Lexer)?
+        .map_err(ParserError::Lexer)?
         .into_iter()
         .peekable();
     let mut vals = Vec::new();

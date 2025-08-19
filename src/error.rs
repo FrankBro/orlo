@@ -4,7 +4,7 @@ use crate::{lexer::Token, util::intersperse, value::Value};
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum ParserError {
-    Lexer,
+    Lexer(crate::lexer::Error),
     NoMoreTokens,
     UnexpectedToken(Token),
     ExpectedToken(Token, Token),
@@ -14,7 +14,7 @@ pub enum ParserError {
 impl Display for ParserError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ParserError::Lexer => write!(f, "Lexer error"),
+            ParserError::Lexer(e) => write!(f, "Lexer error: {:?}", e),
             ParserError::NoMoreTokens => write!(f, "No more tokens"),
             ParserError::UnexpectedToken(t) => write!(f, "Unexpected token: {}", t),
             ParserError::ExpectedToken(expected, found) => {

@@ -20,9 +20,23 @@ fn lex_number(lex: &mut Lexer<Token>) -> Option<i64> {
     Some(number)
 }
 
+#[derive(Default, Debug, Clone, PartialEq, Eq)]
+pub enum Error {
+    LexError(char),
+    #[default]
+    Other,
+}
+
+impl Error {
+    fn from_lexer(lex: &mut logos::Lexer<'_, Token>) -> Self {
+        Error::LexError(lex.slice().chars().next().unwrap())
+    }
+}
+
 #[derive(Logos, Clone, Debug, PartialEq, Eq)]
 #[logos(subpattern symbol = r"[!#$%&|*+\-/:<=>?@^_~]")]
-#[logos(skip r"[ \t\f\r]+")]
+#[logos(error(Error, Error::from_lexer))]
+#[logos(skip r"[ \t\f\r\n]+")]
 pub enum Token {
     #[regex(r#""([^"\\]|\\t|\\u|\\n|\\")*""#, lex_string)]
     String(String),
@@ -54,7 +68,7 @@ impl Display for Token {
     }
 }
 
-pub fn lex(input: &str) -> Result<Vec<Token>, ()> {
+pub fn lex(input: &str) -> Result<Vec<Token>, Error> {
     let lex = Token::lexer(input);
     let mut tokens = Vec::new();
     for token in lex {
