@@ -22,6 +22,7 @@ fn lex_number(lex: &mut Lexer<Token>) -> Option<i64> {
 
 #[derive(Logos, Clone, Debug, PartialEq, Eq)]
 #[logos(subpattern symbol = r"[!#$%&|*+\-/:<=>?@^_~]")]
+#[logos(skip r"[ \t\f\r]+")]
 pub enum Token {
     #[regex(r#""([^"\\]|\\t|\\u|\\n|\\")*""#, lex_string)]
     String(String),
