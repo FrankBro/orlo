@@ -186,14 +186,11 @@ pub fn eval(env: &mut Env, val: &Value) -> Result<Value> {
                 })
             }
             [Value::Atom(atom), Value::String(path)] if atom == "load" => {
-                println!("1");
                 let vals = load(path)?;
-                println!("2");
                 let mut ret = None;
                 for val in vals {
                     ret = Some(eval(env, &val)?);
                 }
-                println!("3");
                 ret.ok_or(Error::EmptyBody)
             }
             [func, args @ ..] => {
