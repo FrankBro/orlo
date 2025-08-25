@@ -6,6 +6,7 @@ use repl::run;
 mod env;
 mod error;
 mod eval;
+mod infer;
 mod lexer;
 mod parser;
 mod primitive;
