@@ -1,184 +1,188 @@
-use std::iter::Peekable;
-
-use crate::{
-    error::ParserError,
-    lexer::{self, Token},
-    value::{FALSE, QUOTE, TRUE, Value},
+use chumsky::{
+    input::{Stream, ValueInput},
+    prelude::*,
 };
+use logos::Logos;
 
-type Result<T> = std::result::Result<T, ParserError>;
+use crate::value::Value;
 
-fn expect_token<T: Iterator<Item = Token>>(
-    expected: Token,
-    tokens: &mut Peekable<T>,
-) -> Result<()> {
-    let token = tokens.next().ok_or(ParserError::NoMoreTokens)?;
-    if token != expected {
-        return Err(ParserError::ExpectedToken(expected, token));
-    }
-    Ok(())
+#[derive(Logos, Clone, Debug, PartialEq, Eq)]
+#[logos(subpattern symbol = r"[!#$%&|*+\-/:<=>?@^_~]")]
+#[logos(skip r"[ \t\f\r\n]+")]
+pub enum Token<'a> {
+    #[regex(r#""([^"\\]|\\t|\\u|\\n|\\")*""#, |lex| {
+        let slice = lex.slice();
+        &slice[1..slice.len() - 1]
+    })]
+    String(&'a str),
+    #[regex(r#"([a-z]|(?&symbol))([a-z0-9]|(?&symbol))*"#)]
+    Atom(&'a str),
+    #[regex(r#"[0-9]+"#, |lex| lex.slice().parse::<i64>().unwrap())]
+    Number(i64),
+    #[token("'")]
+    Quote,
+    #[token(".")]
+    Dot,
+    #[token("(")]
+    LParen,
+    #[token(")")]
+    RParen,
+    Error,
 }
 
-fn check_tokens_left<T: Iterator<Item = Token>>(tokens: &mut Peekable<T>) -> Result<()> {
-    let tokens_left: Vec<Token> = tokens.collect();
-    if !tokens_left.is_empty() {
-        return Err(ParserError::TokensLeft(tokens_left));
-    }
-    Ok(())
+fn parser<'tokens, 'src: 'tokens, I>()
+-> impl Parser<'tokens, I, Value, extra::Err<Rich<'tokens, Token<'src>>>>
+where
+    I: ValueInput<'tokens, Token = Token<'src>, Span = SimpleSpan>,
+{
+    recursive(|sexpr| {
+        let atom = select! { Token::Atom(s) => Value::Atom(s.to_string()) }.labelled("atom");
+        let string =
+            select! { Token::String(s) => Value::String(s.to_string()) }.labelled("string");
+        let number = select! { Token::Number(n) => Value::Number(n) }.labelled("number");
+        let quoted = sexpr
+            .clone()
+            .map(|v| Value::List(vec![Value::Atom("quote".to_string()), v]))
+            .labelled("quoted expression")
+            .delimited_by(just(Token::Quote), end());
+        let list = sexpr
+            .clone()
+            .repeated()
+            .at_least(0)
+            .collect::<Vec<_>>()
+            .then(
+                just(Token::Dot)
+                    .ignore_then(sexpr.clone())
+                    .or_not()
+                    .map(|opt| opt.map(Box::new)),
+            )
+            .map(|(head, tail)| match tail {
+                Some(t) => Value::DottedList(head, t),
+                None => Value::List(head),
+            })
+            .labelled("list")
+            .delimited_by(just(Token::LParen), just(Token::RParen));
+        atom.or(string).or(number).or(quoted).or(list)
+    })
 }
 
-fn parse_string<T: Iterator<Item = Token>>(tokens: &mut Peekable<T>) -> Result<Value> {
-    match tokens.next() {
-        Some(Token::String(string)) => Ok(Value::String(string)),
-        Some(token) => Err(ParserError::UnexpectedToken(token)),
-        None => Err(ParserError::NoMoreTokens),
-    }
+pub fn parse<'a>(input: &'a str) -> Result<Value, Vec<Rich<'a, Token<'a>>>> {
+    let token_iter = Token::lexer(input).spanned().map(|(tok, span)| match tok {
+        Ok(tok) => (tok, span.into()),
+        Err(()) => (Token::Error, span.into()),
+    });
+    let token_stream =
+        Stream::from_iter(token_iter).map((0..input.len()).into(), |(t, s): (_, _)| (t, s));
+    parser().parse(token_stream).into_result()
 }
 
-fn parse_atom<T: Iterator<Item = Token>>(tokens: &mut Peekable<T>) -> Result<Value> {
-    match tokens.next() {
-        Some(Token::Atom(atom)) => match atom.as_str() {
-            atom if atom == TRUE => Ok(Value::Bool(true)),
-            atom if atom == FALSE => Ok(Value::Bool(false)),
-            _ => Ok(Value::Atom(atom)),
-        },
-        Some(token) => Err(ParserError::UnexpectedToken(token)),
-        None => Err(ParserError::NoMoreTokens),
-    }
-}
-
-fn parse_number<T: Iterator<Item = Token>>(tokens: &mut Peekable<T>) -> Result<Value> {
-    match tokens.next() {
-        Some(Token::Number(number)) => Ok(Value::Number(number)),
-        Some(token) => Err(ParserError::UnexpectedToken(token)),
-        None => Err(ParserError::NoMoreTokens),
-    }
-}
-
-fn parse_quoted<T: Iterator<Item = Token>>(tokens: &mut Peekable<T>) -> Result<Value> {
-    expect_token(Token::Quote, tokens)?;
-    let expr = parse_expr_impl(tokens)?;
-    Ok(Value::List(vec![Value::Atom(QUOTE.to_owned()), expr]))
-}
-
-fn parse_any_list<T: Iterator<Item = Token>>(tokens: &mut Peekable<T>) -> Result<Value> {
-    expect_token(Token::LParen, tokens)?;
-    let mut values = Vec::new();
-    loop {
-        match tokens.peek() {
-            Some(Token::RParen) => {
-                expect_token(Token::RParen, tokens)?;
-                return Ok(Value::List(values));
-            }
-            Some(Token::Dot) => {
-                expect_token(Token::Dot, tokens)?;
-                let last = parse_expr_impl(tokens)?;
-                expect_token(Token::RParen, tokens)?;
-                return Ok(Value::DottedList(values, Box::new(last)));
-            }
-            Some(_) => {
-                let value = parse_expr_impl(tokens)?;
-                values.push(value);
-            }
-            None => {
-                return Err(ParserError::NoMoreTokens);
-            }
-        }
-    }
-}
-
-fn parse_expr_impl<T: Iterator<Item = Token>>(tokens: &mut Peekable<T>) -> Result<Value> {
-    match tokens.peek() {
-        Some(Token::Atom(_)) => parse_atom(tokens),
-        Some(Token::String(_)) => parse_string(tokens),
-        Some(Token::Number(_)) => parse_number(tokens),
-        Some(Token::Quote) => parse_quoted(tokens),
-        Some(Token::LParen) => parse_any_list(tokens),
-        Some(token) => Err(ParserError::UnexpectedToken(token.clone())),
-        None => Err(ParserError::NoMoreTokens),
-    }
-}
-
-pub fn parse_expr(input: &str) -> Result<Value> {
-    let mut tokens = lexer::lex(input)
-        .map_err(ParserError::Lexer)?
-        .into_iter()
-        .peekable();
-    let value = parse_expr_impl(&mut tokens)?;
-    check_tokens_left(&mut tokens)?;
-    Ok(value)
-}
-
-pub fn parse_exprs(input: &str) -> Result<Vec<Value>> {
-    let mut tokens = lexer::lex(input)
-        .map_err(ParserError::Lexer)?
-        .into_iter()
-        .peekable();
-    let mut vals = Vec::new();
-    loop {
-        if None == tokens.peek() {
-            break;
-        }
-        let val = parse_expr_impl(&mut tokens)?;
-        vals.push(val);
-    }
-    Ok(vals)
+pub fn parse_multiple<'a>(input: &'a str) -> Result<Vec<Value>, Vec<Rich<'a, Token<'a>>>> {
+    let token_iter = Token::lexer(input).spanned().map(|(tok, span)| match tok {
+        Ok(tok) => (tok, span.into()),
+        Err(()) => (Token::Error, span.into()),
+    });
+    let token_stream =
+        Stream::from_iter(token_iter).map((0..input.len()).into(), |(t, s): (_, _)| (t, s));
+    parser()
+        .repeated()
+        .at_least(0)
+        .collect::<Vec<_>>()
+        .parse(token_stream)
+        .into_result()
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::{error::ParserError, value::Value};
+    use crate::{
+        parser::{parse, parse_multiple},
+        value::Value,
+    };
+
+    fn atom(name: &str) -> Value {
+        Value::Atom(name.to_string())
+    }
+
+    fn list(values: Vec<Value>) -> Value {
+        Value::List(values)
+    }
+
+    fn dotted_list(head: Vec<Value>, tail: Value) -> Value {
+        Value::DottedList(head, Box::new(tail))
+    }
+
+    fn string(str: &str) -> Value {
+        Value::String(str.to_string())
+    }
 
     #[test]
-    fn parse() {
+    fn parse_multiple_test() {
         let cases = vec![
+            ("a b c", vec![atom("a"), atom("b"), atom("c")]),
             (
-                "(a test)",
-                Ok(Value::List(vec![
-                    Value::Atom("a".to_owned()),
-                    Value::Atom("test".to_owned()),
-                ])),
+                "(a b) (c d)",
+                vec![
+                    list(vec![atom("a"), atom("b")]),
+                    list(vec![atom("c"), atom("d")]),
+                ],
             ),
             (
-                "(a (nested) test)",
-                Ok(Value::List(vec![
-                    Value::Atom("a".to_owned()),
-                    Value::List(vec![Value::Atom("nested".to_owned())]),
-                    Value::Atom("test".to_owned()),
-                ])),
+                "'a 'b 'c",
+                vec![
+                    list(vec![atom("quote"), atom("a")]),
+                    list(vec![atom("quote"), atom("b")]),
+                    list(vec![atom("quote"), atom("c")]),
+                ],
             ),
             (
-                "(a (dotted . list) test)",
-                Ok(Value::List(vec![
-                    Value::Atom("a".to_owned()),
-                    Value::DottedList(
-                        vec![Value::Atom("dotted".to_owned())],
-                        Box::new(Value::Atom("list".to_owned())),
-                    ),
-                    Value::Atom("test".to_owned()),
-                ])),
+                "(a . b) (c . d)",
+                vec![
+                    dotted_list(vec![atom("a")], atom("b")),
+                    dotted_list(vec![atom("c")], atom("d")),
+                ],
             ),
-            (
-                "(a '(quoted (dotted . list)) test)",
-                Ok(Value::List(vec![
-                    Value::Atom("a".to_owned()),
-                    Value::List(vec![
-                        Value::Atom("quote".to_owned()),
-                        Value::List(vec![
-                            Value::Atom("quoted".to_owned()),
-                            Value::DottedList(
-                                vec![Value::Atom("dotted".to_owned())],
-                                Box::new(Value::Atom("list".to_owned())),
-                            ),
-                        ]),
-                    ]),
-                    Value::Atom("test".to_owned()),
-                ])),
-            ),
-            ("(a '(imbalanced parens)", Err(ParserError::NoMoreTokens)),
         ];
-        for (input, expected) in cases {
-            let actual = super::parse_expr(input);
+        for (case, expected) in cases {
+            let actual = match parse_multiple(case) {
+                Ok(values) => values,
+                Err(e) => panic!("Failed to parse '{}': {:?}", case, e),
+            };
+            assert_eq!(expected, actual);
+        }
+    }
+
+    #[test]
+    fn parse_test() {
+        let cases = vec![
+            ("a", atom("a")),
+            ("#e", atom("#e")),
+            ("@", atom("@")),
+            ("(a test)", list(vec![atom("a"), atom("test")])),
+            (
+                "(a (nested) list)",
+                list(vec![atom("a"), list(vec![atom("nested")]), atom("list")]),
+            ),
+            ("(a . b)", dotted_list(vec![atom("a")], atom("b"))),
+            (
+                "(a b . c)",
+                dotted_list(vec![atom("a"), atom("b")], atom("c")),
+            ),
+            (
+                "(a (nested) . b)",
+                dotted_list(vec![atom("a"), list(vec![atom("nested")])], atom("b")),
+            ),
+            (
+                "'(a b c)",
+                list(vec![
+                    atom("quote"),
+                    list(vec![atom("a"), atom("b"), atom("c")]),
+                ]),
+            ),
+            ("'a", list(vec![atom("quote"), atom("a")])),
+            ("\"this is a test\"", string("this is a test")),
+            ("12345", Value::Number(12345)),
+        ];
+        for (case, expected) in cases {
+            let actual = parse(case).unwrap();
             assert_eq!(expected, actual);
         }
     }

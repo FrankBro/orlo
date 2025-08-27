@@ -215,7 +215,7 @@ pub fn eval(env: &mut Env, val: &Value) -> Result<Value> {
 
 #[cfg(test)]
 mod tests {
-    use crate::{eval::Env, parser::parse_expr, value::Value};
+    use crate::{eval::Env, parser::parse, value::Value};
 
     use super::Error;
 
@@ -292,7 +292,7 @@ mod tests {
         ];
         let mut env = Env::primitive_bindings();
         for (input, expected) in cases {
-            let val = parse_expr(input).unwrap();
+            let val = parse(input).unwrap();
             let actual = super::eval(&mut env, &val).map(|val| val.to_string());
             let expected = expected.map(|str| str.to_owned());
             assert_eq!(expected, actual,);

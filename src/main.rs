@@ -1,13 +1,13 @@
 use env::Env;
 use eval::eval;
-use parser::parse_expr;
 use repl::run;
+
+use crate::parser::parse;
 
 mod env;
 mod error;
 mod eval;
 mod infer;
-mod lexer;
 mod parser;
 mod primitive;
 mod repl;
@@ -15,7 +15,7 @@ mod util;
 mod value;
 
 fn run_arg(arg: &str) {
-    match parse_expr(arg) {
+    match parse(arg) {
         Ok(value) => {
             let mut env = Env::primitive_bindings();
             match eval(&mut env, &value) {
@@ -23,7 +23,7 @@ fn run_arg(arg: &str) {
                 Err(e) => println!("Eval error: {}", e),
             }
         }
-        Err(e) => println!("Parse error: {}", e),
+        Err(e) => println!("Parse error: {:?}", e),
     }
 }
 

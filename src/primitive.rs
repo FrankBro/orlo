@@ -4,7 +4,7 @@ use crate::{
     env::Env,
     error::Error,
     eval::apply,
-    parser::{parse_expr, parse_exprs},
+    parser::{parse, parse_multiple},
     value::Value,
 };
 
@@ -223,18 +223,23 @@ pub fn close_port(env: &mut Env, vals: &[Value]) -> Result<Value> {
     }
 }
 
+// TODO: Don't ignore error
 pub fn read_proc(env: &mut Env, vals: &[Value]) -> Result<Value> {
     match vals {
         [] => {
             let mut buf = String::new();
-            stdin().read_line(&mut buf).map_err(Error::IO)?;
-            parse_expr(&buf).map_err(Error::Parser)
+            stdin()
+                .read_line(&mut buf)
+                .map_err(|e| Error::IO(e.kind()))?;
+            parse(&buf).map_err(|_| Error::Parser)
         }
         [Value::Port(port_id)] => {
             let reader = env.get_read_port(port_id)?;
             let mut buf = String::new();
-            reader.read_line(&mut buf).map_err(Error::IO)?;
-            parse_expr(&buf).map_err(Error::Parser)
+            reader
+                .read_line(&mut buf)
+                .map_err(|e| Error::IO(e.kind()))?;
+            parse(&buf).map_err(|_| Error::Parser)
         }
         _ => todo!(),
     }
@@ -249,7 +254,9 @@ pub fn write_proc(env: &mut Env, vals: &[Value]) -> Result<Value> {
         [val, Value::Port(port_id)] => {
             let writer = env.get_write_port(port_id)?;
             let buf = val.to_string();
-            writer.write_all(buf.as_bytes()).map_err(Error::IO)?;
+            writer
+                .write_all(buf.as_bytes())
+                .map_err(|e| Error::IO(e.kind()))?;
             Ok(Value::Bool(true))
         }
         _ => todo!(),
@@ -259,16 +266,17 @@ pub fn write_proc(env: &mut Env, vals: &[Value]) -> Result<Value> {
 pub fn read_contents(vals: &[Value]) -> Result<Value> {
     match vals {
         [Value::String(path)] => {
-            let lines = std::fs::read_to_string(path).map_err(Error::IO)?;
+            let lines = std::fs::read_to_string(path).map_err(|e| Error::IO(e.kind()))?;
             Ok(Value::String(lines))
         }
         _ => todo!(),
     }
 }
 
+// TODO: Don't ignore error
 pub fn load(path: &str) -> Result<Vec<Value>> {
-    let lines = std::fs::read_to_string(path).map_err(Error::IO)?;
-    parse_exprs(&lines).map_err(Error::Parser)
+    let lines = std::fs::read_to_string(path).map_err(|e| Error::IO(e.kind()))?;
+    parse_multiple(&lines).map_err(|_| Error::Parser)
 }
 
 pub fn read_all(vals: &[Value]) -> Result<Value> {

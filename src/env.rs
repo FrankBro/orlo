@@ -79,7 +79,7 @@ impl Env {
     }
 
     pub fn make_read_port(&mut self, path: &str) -> Result<Value> {
-        let file = File::open(path).map_err(Error::IO)?;
+        let file = File::open(path).map_err(|e| Error::IO(e.kind()))?;
         let reader = BufReader::new(file);
         let port_id = self.next_port_id;
         self.next_port_id += 1;
@@ -88,7 +88,7 @@ impl Env {
     }
 
     pub fn make_write_port(&mut self, path: &str) -> Result<Value> {
-        let file = File::open(path).map_err(Error::IO)?;
+        let file = File::open(path).map_err(|e| Error::IO(e.kind()))?;
         let writer = BufWriter::new(file);
         let port_id = self.next_port_id;
         self.next_port_id += 1;
