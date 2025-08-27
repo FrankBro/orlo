@@ -40,11 +40,10 @@ where
         let string =
             select! { Token::String(s) => Value::String(s.to_string()) }.labelled("string");
         let number = select! { Token::Number(n) => Value::Number(n) }.labelled("number");
-        let quoted = sexpr
-            .clone()
+        let quoted = just(Token::Quote)
+            .ignore_then(sexpr.clone())
             .map(|v| Value::List(vec![Value::Atom("quote".to_string()), v]))
-            .labelled("quoted expression")
-            .delimited_by(just(Token::Quote), end());
+            .labelled("quoted expression");
         let list = sexpr
             .clone()
             .repeated()
