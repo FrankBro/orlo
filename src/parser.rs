@@ -10,6 +10,7 @@ use crate::value::Value;
 #[logos(subpattern symbol = r"[!#$%&|*+\-/:<=>?@^_~]")]
 #[logos(skip r"[ \t\f\r\n]+")]
 pub enum Token<'a> {
+    Error,
     #[regex(r#""([^"\\]|\\t|\\u|\\n|\\")*""#, |lex| {
         let slice = lex.slice();
         &slice[1..slice.len() - 1]
@@ -27,7 +28,10 @@ pub enum Token<'a> {
     LParen,
     #[token(")")]
     RParen,
-    Error,
+    #[token("#t")]
+    True,
+    #[token("#f")]
+    False,
 }
 
 fn parser<'tokens, 'src: 'tokens, I>()
@@ -40,6 +44,10 @@ where
         let string =
             select! { Token::String(s) => Value::String(s.to_string()) }.labelled("string");
         let number = select! { Token::Number(n) => Value::Number(n) }.labelled("number");
+        let bool = select! {
+            Token::True => Value::Bool(true),
+            Token::False => Value::Bool(false),
+        };
         let quoted = just(Token::Quote)
             .ignore_then(sexpr.clone())
             .map(|v| Value::List(vec![Value::Atom("quote".to_string()), v]))
@@ -61,7 +69,7 @@ where
             })
             .labelled("list")
             .delimited_by(just(Token::LParen), just(Token::RParen));
-        atom.or(string).or(number).or(quoted).or(list)
+        bool.or(atom).or(string).or(number).or(quoted).or(list)
     })
 }
 
@@ -113,6 +121,10 @@ mod tests {
         Value::String(str.to_string())
     }
 
+    fn bool(value: bool) -> Value {
+        Value::Bool(value)
+    }
+
     #[test]
     fn parse_multiple_test() {
         let cases = vec![
@@ -152,6 +164,8 @@ mod tests {
     #[test]
     fn parse_test() {
         let cases = vec![
+            ("#f", bool(false)),
+            ("#t", bool(true)),
             ("a", atom("a")),
             ("#e", atom("#e")),
             ("@", atom("@")),
