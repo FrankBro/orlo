@@ -1,50 +1,9 @@
 use std::collections::HashMap;
 
-use crate::value::{PrimitiveFunc, QUOTE, Value};
-
-pub type Id = usize;
-pub type Level = i64;
-
-#[derive(Clone, Debug, PartialEq)]
-pub enum Type {
-    Const(&'static str),
-    App(Box<Type>, Vec<Type>),
-    Arrow(Vec<Type>, Box<Type>),
-    Var(Id),
-}
-
-pub fn replace_ty_constants_with_vars(env: &HashMap<String, Type>, ty: Type) -> Type {
-    match ty {
-        Type::Const(name) => match env.get(name) {
-            Some(ty) => ty.clone(),
-            None => Type::Const(name),
-        },
-        Type::Var(_) => ty,
-        Type::App(ty, args) => {
-            let ty = Box::new(replace_ty_constants_with_vars(env, *ty));
-            let args = args
-                .into_iter()
-                .map(|arg| replace_ty_constants_with_vars(env, arg))
-                .collect();
-            Type::App(ty, args)
-        }
-        Type::Arrow(params, ret) => {
-            let params = params
-                .into_iter()
-                .map(|param| replace_ty_constants_with_vars(env, param))
-                .collect();
-            let ret = Box::new(replace_ty_constants_with_vars(env, *ret));
-            Type::Arrow(params, ret)
-        }
-    }
-}
-
-#[derive(Clone, Debug)]
-pub enum TypeVar {
-    Unbound(Level),
-    Link(Type),
-    Generic,
-}
+use crate::{
+    typing::{Id, Level, Type, TypeVar, replace_ty_constants_with_vars},
+    value::{PrimitiveFunc, QUOTE, Value},
+};
 
 pub static SYMBOL: &str = "symbol";
 pub static INT: &str = "int";
@@ -213,17 +172,17 @@ impl Env {
                 let ty = self.get_var(name)?;
                 self.instantiate(level, ty)
             }
-            Value::Number(_) => Ok(Type::Const(INT)),
-            Value::String(_) => Ok(Type::Const(STRING)),
-            Value::Bool(_) => Ok(Type::Const(BOOL)),
+            Value::Number(_) => Ok(Type::Const(INT.to_owned())),
+            Value::String(_) => Ok(Type::Const(STRING.to_owned())),
+            Value::Bool(_) => Ok(Type::Const(BOOL.to_owned())),
             Value::PrimitiveFunc(f) => match f {
                 PrimitiveFunc::Add
                 | PrimitiveFunc::Sub
                 | PrimitiveFunc::Mul
                 | PrimitiveFunc::Div
                 | PrimitiveFunc::Rem => Ok(Type::Arrow(
-                    vec![Type::Const(INT), Type::Const(INT)],
-                    Box::new(Type::Const(INT)),
+                    vec![Type::Const(INT.to_owned()), Type::Const(INT.to_owned())],
+                    Box::new(Type::Const(INT.to_owned())),
                 )),
                 PrimitiveFunc::Eq
                 | PrimitiveFunc::Lt
@@ -231,20 +190,23 @@ impl Env {
                 | PrimitiveFunc::Ne
                 | PrimitiveFunc::Ge
                 | PrimitiveFunc::Le => Ok(Type::Arrow(
-                    vec![Type::Const(INT), Type::Const(INT)],
-                    Box::new(Type::Const(BOOL)),
+                    vec![Type::Const(INT.to_owned()), Type::Const(INT.to_owned())],
+                    Box::new(Type::Const(BOOL.to_owned())),
                 )),
                 PrimitiveFunc::And | PrimitiveFunc::Or => Ok(Type::Arrow(
-                    vec![Type::Const(BOOL), Type::Const(BOOL)],
-                    Box::new(Type::Const(BOOL)),
+                    vec![Type::Const(BOOL.to_owned()), Type::Const(BOOL.to_owned())],
+                    Box::new(Type::Const(BOOL.to_owned())),
                 )),
                 PrimitiveFunc::StringEq
                 | PrimitiveFunc::StringLt
                 | PrimitiveFunc::StringGt
                 | PrimitiveFunc::StringLe
                 | PrimitiveFunc::StringGe => Ok(Type::Arrow(
-                    vec![Type::Const(STRING), Type::Const(STRING)],
-                    Box::new(Type::Const(BOOL)),
+                    vec![
+                        Type::Const(STRING.to_owned()),
+                        Type::Const(STRING.to_owned()),
+                    ],
+                    Box::new(Type::Const(BOOL.to_owned())),
                 )),
                 PrimitiveFunc::Car => {
                     let ret = self.new_unbound_tvar(level);
@@ -417,6 +379,17 @@ impl Env {
             }
             _ => Err(Error::ExpectedAFunction),
         }
+    }
+
+    pub fn replace_ty_constants_with_vars(&mut self, vars: Vec<String>, ty: Type) -> Type {
+        if vars.is_empty() {
+            return ty;
+        }
+        let env: HashMap<String, Type> = vars
+            .into_iter()
+            .map(|name| (name, self.new_generic_tvar()))
+            .collect();
+        replace_ty_constants_with_vars(&env, ty)
     }
 
     pub fn ty_to_string(&self, ty: &Type) -> Result<String> {

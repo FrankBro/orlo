@@ -11,6 +11,7 @@ mod infer;
 mod parser;
 mod primitive;
 mod repl;
+mod typing;
 mod util;
 mod value;
 
