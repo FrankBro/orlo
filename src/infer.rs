@@ -222,7 +222,12 @@ impl Env {
                 [Value::Atom(atom), val] if atom == QUOTE => todo!(),
                 [Value::Atom(atom), pred, conseq, alt] if atom == "if" => todo!(),
                 [Value::Atom(atom), Value::Atom(var), form] if atom == "set!" => todo!(),
-                [Value::Atom(atom), Value::Atom(var), form] if atom == "define" => todo!(),
+                [Value::Atom(atom), Value::Atom(var), form] if atom == "define" => {
+                    let var_ty = self.infer(level + 1, form)?;
+                    self.generalize(level, &var_ty)?;
+                    self.vars.insert(var.clone(), var_ty.clone());
+                    Ok(var_ty)
+                }
                 [Value::Atom(atom), Value::List(name_args), body @ ..] if atom == "define" => {
                     todo!()
                 }
@@ -485,6 +490,12 @@ impl Namer {
 }
 #[cfg(test)]
 mod tests {
+    use crate::{
+        infer::{BOOL, Env, INT, STRING},
+        parser::parse,
+        typing::Type,
+    };
+
     use super::Error;
 
     enum Expected {
@@ -500,18 +511,26 @@ mod tests {
         Expected::Fail(e)
     }
 
-    // #[test]
-    // fn infer() {
-    //     let cases: Vec<(&str, Type)> = vec![
-    //         ("42", Type::Const(INT)),
-    //         ("#t", Type::Const(BOOL)),
-    //         ("\"hello\"", Type::Const(STRING)),
-    //     ];
-    //     for (input, expected) in cases {
-    //         let mut env = Env::default();
-    //         let value = parse_expr(input).unwrap();
-    //         let actual = env.infer_value(&value).unwrap();
-    //         assert_eq!(actual, expected);
-    //     }
-    // }
+    #[test]
+    fn infer() {
+        let cases: Vec<(&str, &str)> = vec![
+            ("42", "int"),
+            ("#t", "bool"),
+            ("#f", "bool"),
+            ("\"hello\"", "string"),
+            ("(define a 1)", "int"),
+        ];
+        let env = Env::default();
+        for (input, expected) in cases {
+            let (vars, ty) = crate::typing::parse(expected).unwrap();
+            let mut env = env.clone();
+            let expected = env.replace_ty_constants_with_vars(vars, ty);
+            let value = parse(input).unwrap();
+            let actual = env.infer_value(&value).unwrap();
+            env.generalize(-1, &actual).unwrap();
+            let expected = env.ty_to_string(&expected).unwrap();
+            let actual = env.ty_to_string(&actual).unwrap();
+            assert_eq!(actual, expected);
+        }
+    }
 }
