@@ -29,6 +29,49 @@ pub struct Env {
     tvars: Vec<TypeVar>,
 }
 
+fn primitive_function(f: &PrimitiveFunc) -> Type {
+    match f {
+        PrimitiveFunc::Add
+        | PrimitiveFunc::Sub
+        | PrimitiveFunc::Mul
+        | PrimitiveFunc::Div
+        | PrimitiveFunc::Rem => Type::Arrow(
+            vec![],
+            Some(Box::new(Type::Const(INT.to_owned()))),
+            Box::new(Type::Const(INT.to_owned())),
+        ),
+        PrimitiveFunc::Eq
+        | PrimitiveFunc::Lt
+        | PrimitiveFunc::Gt
+        | PrimitiveFunc::Ne
+        | PrimitiveFunc::Ge
+        | PrimitiveFunc::Le => Type::Arrow(
+            vec![],
+            Some(Box::new(Type::Const(INT.to_owned()))),
+            Box::new(Type::Const(BOOL.to_owned())),
+        ),
+        PrimitiveFunc::And | PrimitiveFunc::Or => Type::Arrow(
+            vec![],
+            Some(Box::new(Type::Const(BOOL.to_owned()))),
+            Box::new(Type::Const(BOOL.to_owned())),
+        ),
+        PrimitiveFunc::StringEq
+        | PrimitiveFunc::StringLt
+        | PrimitiveFunc::StringGt
+        | PrimitiveFunc::StringLe
+        | PrimitiveFunc::StringGe => Type::Arrow(
+            vec![],
+            Some(Box::new(Type::Const(STRING.to_owned()))),
+            Box::new(Type::Const(BOOL.to_owned())),
+        ),
+        PrimitiveFunc::Car => todo!(),
+        PrimitiveFunc::Cdr => todo!(),
+        PrimitiveFunc::Cons => todo!(),
+        PrimitiveFunc::Eqv => todo!(),
+        PrimitiveFunc::Equal => todo!(),
+    }
+}
+
 impl Env {
     pub fn infer_value(&mut self, value: &Value) -> Result<Type> {
         let ty = self.infer(0, value)?;
@@ -99,9 +142,12 @@ impl Env {
                 }
                 self.occurs_check_adjust_levels(tvar_id, tvar_level, ty)
             }
-            Type::Arrow(params, ret) => {
+            Type::Arrow(params, vararg, ret) => {
                 for param in params {
                     self.occurs_check_adjust_levels(tvar_id, tvar_level, param)?;
+                }
+                if let Some(vararg) = vararg {
+                    self.occurs_check_adjust_levels(tvar_id, tvar_level, vararg)?;
                 }
                 self.occurs_check_adjust_levels(tvar_id, tvar_level, ret)
             }
@@ -126,7 +172,7 @@ impl Env {
                 }
                 self.unify(app_ty1, app_ty2)
             }
-            (Type::Arrow(params1, ret1), Type::Arrow(params2, ret2)) => {
+            (Type::Arrow(params1, vararg1, ret1), Type::Arrow(params2, vararg2, ret2)) => {
                 if params1.len() != params2.len() {
                     return Err(Error::CannotUnify(ty1.clone(), ty2.clone()));
                 }
@@ -134,6 +180,12 @@ impl Env {
                     let param1 = &params1[i];
                     let param2 = &params2[i];
                     self.unify(param1, param2)?;
+                }
+                match (vararg1, vararg2) {
+                    (Some(vararg1), Some(vararg2)) => self.unify(vararg1, vararg2)?,
+                    _ => {
+                        return Err(Error::CannotUnify(ty1.clone(), ty2.clone()));
+                    }
                 }
                 self.unify(ret1, ret2)
             }
@@ -175,51 +227,20 @@ impl Env {
             Value::Number(_) => Ok(Type::Const(INT.to_owned())),
             Value::String(_) => Ok(Type::Const(STRING.to_owned())),
             Value::Bool(_) => Ok(Type::Const(BOOL.to_owned())),
-            Value::PrimitiveFunc(f) => match f {
-                PrimitiveFunc::Add
-                | PrimitiveFunc::Sub
-                | PrimitiveFunc::Mul
-                | PrimitiveFunc::Div
-                | PrimitiveFunc::Rem => Ok(Type::Arrow(
-                    vec![Type::Const(INT.to_owned()), Type::Const(INT.to_owned())],
-                    Box::new(Type::Const(INT.to_owned())),
-                )),
-                PrimitiveFunc::Eq
-                | PrimitiveFunc::Lt
-                | PrimitiveFunc::Gt
-                | PrimitiveFunc::Ne
-                | PrimitiveFunc::Ge
-                | PrimitiveFunc::Le => Ok(Type::Arrow(
-                    vec![Type::Const(INT.to_owned()), Type::Const(INT.to_owned())],
-                    Box::new(Type::Const(BOOL.to_owned())),
-                )),
-                PrimitiveFunc::And | PrimitiveFunc::Or => Ok(Type::Arrow(
-                    vec![Type::Const(BOOL.to_owned()), Type::Const(BOOL.to_owned())],
-                    Box::new(Type::Const(BOOL.to_owned())),
-                )),
-                PrimitiveFunc::StringEq
-                | PrimitiveFunc::StringLt
-                | PrimitiveFunc::StringGt
-                | PrimitiveFunc::StringLe
-                | PrimitiveFunc::StringGe => Ok(Type::Arrow(
-                    vec![
-                        Type::Const(STRING.to_owned()),
-                        Type::Const(STRING.to_owned()),
-                    ],
-                    Box::new(Type::Const(BOOL.to_owned())),
-                )),
-                PrimitiveFunc::Car => {
-                    let ret = self.new_unbound_tvar(level);
-                    todo!();
-                    Ok(Type::Arrow(vec![], Box::new(ret)))
-                }
-                PrimitiveFunc::Cdr => todo!(),
-                PrimitiveFunc::Cons => todo!(),
-                PrimitiveFunc::Eqv => todo!(),
-                PrimitiveFunc::Equal => todo!(),
-            },
+            Value::PrimitiveFunc(f) => Ok(primitive_function(f)),
             Value::List(vals) => match &vals[..] {
-                [Value::Atom(atom), val] if atom == QUOTE => todo!(),
+                [Value::Atom(atom), val] if atom == QUOTE => match val {
+                    Value::Atom(_) => Ok(Type::Const(SYMBOL.to_owned())),
+                    Value::List(_) => Ok(Type::Const("list".to_owned())),
+                    Value::DottedList(_, _) => Ok(Type::Const("dotted-list".to_owned())),
+                    Value::Number(_) => Ok(Type::Const("number".to_owned())),
+                    Value::String(_) => Ok(Type::Const("string".to_owned())),
+                    Value::Bool(_) => Ok(Type::Const("bool".to_owned())),
+                    Value::PrimitiveFunc(_) => Ok(Type::Const("primitive-func".to_owned())),
+                    Value::Func { .. } => Ok(Type::Const("func".to_owned())),
+                    Value::IOFunc(_) => Ok(Type::Const("io-func".to_owned())),
+                    Value::Port(_) => Ok(Type::Const("port".to_owned())),
+                },
                 [Value::Atom(atom), pred, conseq, alt] if atom == "if" => todo!(),
                 [Value::Atom(atom), Value::Atom(var), form] if atom == "set!" => todo!(),
                 [Value::Atom(atom), Value::Atom(var), form] if atom == "define" => {
@@ -250,11 +271,17 @@ impl Env {
                 [Value::Atom(atom), Value::String(path)] if atom == "load" => todo!(),
                 [func, args @ ..] => {
                     let f_ty = self.infer(level, func)?;
-                    let (params, ret) = self.match_fun_ty(args.len(), f_ty)?;
+                    let (params, vararg, ret) = self.match_fun_ty(args.len(), f_ty)?;
                     for i in 0..args.len() {
                         let arg = &args[i];
                         let arg_ty = self.infer(level, arg)?;
-                        let param = &params[i];
+                        let param = if i < params.len() {
+                            &params[i]
+                        } else if let Some(vararg) = &vararg {
+                            vararg
+                        } else {
+                            unreachable!("match_fun_ty should've taken care of this")
+                        };
                         self.unify(&arg_ty, param)?;
                     }
                     Ok(*ret)
@@ -296,9 +323,12 @@ impl Env {
                 }
                 self.generalize(level, ty)
             }
-            Type::Arrow(params, ret) => {
+            Type::Arrow(params, vararg, ret) => {
                 for param in params {
                     self.generalize(level, param)?;
+                }
+                if let Some(vararg) = vararg {
+                    self.generalize(level, vararg)?;
                 }
                 self.generalize(level, ret)
             }
@@ -341,28 +371,40 @@ impl Env {
                 }
                 Ok(Type::App(Box::new(instantiated_ty), instantiated_args))
             }
-            Type::Arrow(params, ret) => {
+            Type::Arrow(params, vararg, ret) => {
                 let instantiated_ret = self.instantiate_impl(id_vars, level, *ret)?;
                 let mut instantiated_params = Vec::with_capacity(params.len());
                 for param in params {
                     let instantiated_param = self.instantiate_impl(id_vars, level, param)?;
                     instantiated_params.push(instantiated_param);
                 }
-                Ok(Type::Arrow(instantiated_params, Box::new(instantiated_ret)))
+                let instantiated_vararg = match vararg {
+                    Some(vararg) => Some(Box::new(self.instantiate_impl(id_vars, level, *vararg)?)),
+                    None => None,
+                };
+                Ok(Type::Arrow(
+                    instantiated_params,
+                    instantiated_vararg,
+                    Box::new(instantiated_ret),
+                ))
             }
         }
     }
 
-    fn match_fun_ty(&mut self, num_params: usize, ty: Type) -> Result<(Vec<Type>, Box<Type>)> {
+    fn match_fun_ty(
+        &mut self,
+        num_params: usize,
+        ty: Type,
+    ) -> Result<(Vec<Type>, Option<Box<Type>>, Box<Type>)> {
         match ty {
-            Type::Arrow(params, ret) => {
-                if params.len() != num_params {
+            Type::Arrow(params, vararg, ret) => {
+                if num_params < params.len() {
                     return Err(Error::UnexpectedNumberOfArguments {
                         expected: params.len(),
                         actual: num_params,
                     });
                 }
-                Ok((params, ret))
+                Ok((params, vararg, ret))
             }
             Type::Var(id) => {
                 let tvar = self.get_tvar(id)?;
@@ -373,10 +415,12 @@ impl Env {
                             let param = self.new_unbound_tvar(level);
                             params.push(param);
                         }
+                        // TODO: This can't be correct to always assume it's not a vararg
+                        let vararg = None;
                         let ret = Box::new(self.new_unbound_tvar(level));
-                        let ty = Type::Arrow(params.clone(), ret.clone());
+                        let ty = Type::Arrow(params.clone(), vararg.clone(), ret.clone());
                         self.link(id, ty)?;
-                        Ok((params, ret))
+                        Ok((params, vararg, ret))
                     }
                     TypeVar::Link(ty) => self.match_fun_ty(num_params, ty),
                     TypeVar::Generic => Err(Error::ExpectedAFunction),
@@ -418,7 +462,7 @@ impl Env {
                 ty_str.push(']');
                 Ok(ty_str)
             }
-            Type::Arrow(params, ret) => {
+            Type::Arrow(params, vararg, ret) => {
                 let mut ty_str = if is_simple {
                     "(".to_owned()
                 } else {
@@ -460,6 +504,50 @@ impl Env {
                 }
             }
         }
+    }
+
+    pub fn primitive_bindings() -> Self {
+        let mut env = Env::default();
+        fn define_primitive_func(env: &mut Env, name: &str, func: PrimitiveFunc) {
+            let ty = primitive_function(&func);
+            env.vars.insert(name.to_owned(), ty);
+        }
+        define_primitive_func(&mut env, "+", PrimitiveFunc::Add);
+        define_primitive_func(&mut env, "-", PrimitiveFunc::Sub);
+        define_primitive_func(&mut env, "*", PrimitiveFunc::Mul);
+        define_primitive_func(&mut env, "/", PrimitiveFunc::Div);
+        define_primitive_func(&mut env, "mod", PrimitiveFunc::Rem);
+        define_primitive_func(&mut env, "quotient", PrimitiveFunc::Div);
+        define_primitive_func(&mut env, "remainder", PrimitiveFunc::Rem);
+        define_primitive_func(&mut env, "=", PrimitiveFunc::Eq);
+        define_primitive_func(&mut env, "<", PrimitiveFunc::Lt);
+        define_primitive_func(&mut env, ">", PrimitiveFunc::Gt);
+        define_primitive_func(&mut env, "/=", PrimitiveFunc::Ne);
+        define_primitive_func(&mut env, ">=", PrimitiveFunc::Ge);
+        define_primitive_func(&mut env, "<=", PrimitiveFunc::Le);
+        define_primitive_func(&mut env, "&&", PrimitiveFunc::And);
+        define_primitive_func(&mut env, "||", PrimitiveFunc::Or);
+        define_primitive_func(&mut env, "string=?", PrimitiveFunc::StringEq);
+        define_primitive_func(&mut env, "string<?", PrimitiveFunc::StringLt);
+        define_primitive_func(&mut env, "string>?", PrimitiveFunc::StringGt);
+        define_primitive_func(&mut env, "string<=?", PrimitiveFunc::StringLe);
+        define_primitive_func(&mut env, "string>=?", PrimitiveFunc::StringGe);
+        // define_primitive_func(&mut env, "car", PrimitiveFunc::Car);
+        // define_primitive_func(&mut env, "cdr", PrimitiveFunc::Cdr);
+        // define_primitive_func(&mut env, "cons", PrimitiveFunc::Cons);
+        // define_primitive_func(&mut env, "eq?", PrimitiveFunc::Eqv);
+        // define_primitive_func(&mut env, "eqv?", PrimitiveFunc::Eqv);
+        // define_primitive_func(&mut env, "equal?", PrimitiveFunc::Equal);
+        // define_io_func(&mut env, "apply", IOFunc::Apply);
+        // define_io_func(&mut env, "open-input-file", IOFunc::MakeReadPort);
+        // define_io_func(&mut env, "open-output-file", IOFunc::MakeWritePort);
+        // define_io_func(&mut env, "close-input-port", IOFunc::ClosePort);
+        // define_io_func(&mut env, "close-output-port", IOFunc::ClosePort);
+        // define_io_func(&mut env, "read", IOFunc::Read);
+        // define_io_func(&mut env, "write", IOFunc::Write);
+        // define_io_func(&mut env, "read-contents", IOFunc::ReadContents);
+        // define_io_func(&mut env, "read-all", IOFunc::ReadAll);
+        env
     }
 }
 
@@ -514,23 +602,87 @@ mod tests {
     #[test]
     fn infer() {
         let cases: Vec<(&str, &str)> = vec![
-            ("42", "int"),
-            ("#t", "bool"),
-            ("#f", "bool"),
-            ("\"hello\"", "string"),
-            ("(define a 1)", "int"),
+            ("'atom", "symbol"),
+            ("2", "int"),
+            ("\"a string\"", "string"),
+            ("(+ 2 2)", "int"),
+            ("(+ 2 (- 4 1))", "int"),
+            ("(- (+ 4 6 3) 3 5 2)", "int"),
+            ("(< 2 3)", "bool"),
+            // ("(> 2 3)", Ok("#f")),
+            // ("(>= 3 3)", Ok("#t")),
+            // ("(string=? \"test\" \"test\")", Ok("#t")),
+            // ("(string<? \"abc\" \"bba\")", Ok("#t")),
+            // ("(if (> 2 3) \"no\" \"yes\")", Ok("\"yes\"")),
+            // ("(if (= 3 3) (+ 2 3 (- 5 1)) \"unequal\")", Ok("9")),
+            // ("(cdr '(a simple test))", Ok("(simple test)")),
+            // ("(car (cdr '(a simple test)))", Ok("simple")),
+            // ("(car '((this is) a test))", Ok("(this is)")),
+            // ("(cons '(this is) 'test)", Ok("((this is) . test)")),
+            // ("(cons '(this is) '())", Ok("((this is))")),
+            // ("(eqv? 1 3)", Ok("#f")),
+            // ("(eqv? 3 3)", Ok("#t")),
+            // ("(eqv? 'atom 'atom)", Ok("#t")),
+            // ("(define x 3)", Ok("3")),
+            // ("(+ x 2)", Ok("5")),
+            // (
+            //     "(+ y 2)",
+            //     Err(Error::UnboundVar(
+            //         "Getting an unbound variable".to_owned(),
+            //         "y".to_owned(),
+            //     )),
+            // ),
+            // ("(define y 5)", Ok("5")),
+            // ("(+ x (- y 2))", Ok("6")),
+            // ("(define str \"A string\")", Ok("\"A string\"")),
+            // (
+            //     "(< str \"The string\")",
+            //     Err(Error::TypeMismatch(
+            //         "number".to_owned(),
+            //         Value::String("A string".to_owned()),
+            //     )),
+            // ),
+            // ("(string<? str \"The string\")", Ok("#t")),
+            // ("(define (f x y) (+ x y))", Ok("(lambda (x y) ...)")),
+            // ("(f 1 2)", Ok("3")),
+            // (
+            //     "(f 1 2 3)",
+            //     Err(Error::NumArgs(
+            //         2,
+            //         vec![Value::Number(1), Value::Number(2), Value::Number(3)],
+            //     )),
+            // ),
+            // ("(f 1)", Err(Error::NumArgs(2, vec![Value::Number(1)]))),
+            // (
+            //     "(define (factorial x) (if (= x 1) 1 (* x (factorial (- x 1)))))",
+            //     Ok("(lambda (x) ...)"),
+            // ),
+            // ("(factorial 10)", Ok("3628800")),
+            // (
+            //     "(define (counter inc) (lambda (x) (set! inc (+ x inc)) inc))",
+            //     Ok("(lambda (inc) ...)"),
+            // ),
+            // ("(define my-count (counter 5))", Ok("(lambda (x) ...)")),
+            // ("(my-count 3)", Ok("8")),
+            // ("(my-count 6)", Ok("14")),
+            // ("(my-count 5)", Ok("19")),
+            // ("(load \"stdlib.scm\")", Ok("(lambda (pred lst) ...)")),
+            // ("(map (curry + 2) '(1 2 3 4))", Ok("(3 4 5 6)")),
+            // ("(filter even? '(1 2 3 4))", Ok("(2 4)")),
         ];
-        let env = Env::default();
+        let env = Env::primitive_bindings();
         for (input, expected) in cases {
             let (vars, ty) = crate::typing::parse(expected).unwrap();
             let mut env = env.clone();
             let expected = env.replace_ty_constants_with_vars(vars, ty);
             let value = parse(input).unwrap();
-            let actual = env.infer_value(&value).unwrap();
+            let actual = env
+                .infer_value(&value)
+                .expect(&format!("input: {}, value: {:?}", input, value));
             env.generalize(-1, &actual).unwrap();
             let expected = env.ty_to_string(&expected).unwrap();
             let actual = env.ty_to_string(&actual).unwrap();
-            assert_eq!(actual, expected);
+            assert_eq!(actual, expected, "input: {}, value: {}", input, value);
         }
     }
 }

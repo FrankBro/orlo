@@ -13,7 +13,7 @@ pub type Level = i64;
 pub enum Type {
     Const(String),
     App(Box<Type>, Vec<Type>),
-    Arrow(Vec<Type>, Box<Type>),
+    Arrow(Vec<Type>, Option<Box<Type>>, Box<Type>), // args, vararg, ret
     Var(Id),
 }
 
@@ -32,13 +32,14 @@ pub fn replace_ty_constants_with_vars(env: &HashMap<String, Type>, ty: Type) -> 
                 .collect();
             Type::App(ty, args)
         }
-        Type::Arrow(params, ret) => {
+        Type::Arrow(params, vararg, ret) => {
             let params = params
                 .into_iter()
                 .map(|param| replace_ty_constants_with_vars(env, param))
                 .collect();
+            let vararg = vararg.map(|vararg| replace_ty_constants_with_vars(env, *vararg));
             let ret = Box::new(replace_ty_constants_with_vars(env, *ret));
-            Type::Arrow(params, ret)
+            Type::Arrow(params, vararg.map(Box::new), ret)
         }
     }
 }
@@ -70,6 +71,10 @@ pub enum Token<'a> {
     RBracket,
     #[token(",")]
     Comma,
+    #[token("...")]
+    Vararg,
+    #[token("fn")]
+    Fn,
 }
 
 fn parser<'tokens, 'src: 'tokens, I>()
@@ -77,7 +82,7 @@ fn parser<'tokens, 'src: 'tokens, I>()
 where
     I: ValueInput<'tokens, Token = Token<'src>, Span = SimpleSpan>,
 {
-    // parse "a", "pair[a, b]", "a -> b -> c"
+    // parse "a", "pair[a, b]", "fn(a, b, ...c) -> d"
     recursive(|ty| {
         let atom = select! { Token::Const(name) => Type::Const(name.to_string()) }.labelled("type");
         let app = atom
@@ -93,19 +98,25 @@ where
             .ignore_then(ty.clone())
             .then_ignore(just(Token::RParen))
             .labelled("parenthesized type");
-        let simple_ty = app.or(parens).or(atom).labelled("simple type");
-        simple_ty
-            .separated_by(just(Token::Arrow))
-            .at_least(1)
-            .collect::<Vec<_>>()
-            .map(|mut types| {
-                if types.len() == 1 {
-                    types.pop().unwrap()
-                } else {
-                    let ret = types.pop().unwrap();
-                    Type::Arrow(types, Box::new(ret))
-                }
-            })
+        let fn_ty = just(Token::Fn)
+            .then(just(Token::LParen))
+            .ignore_then(
+                ty.clone()
+                    .separated_by(just(Token::Comma))
+                    .collect::<Vec<_>>()
+                    .then(
+                        just(Token::Comma)
+                            .ignore_then(select! { Token::Vararg => () })
+                            .ignore_then(ty.clone())
+                            .or_not(),
+                    ), // .collect::<Vec<_>>(),
+            )
+            .then_ignore(just(Token::RParen))
+            .then_ignore(just(Token::Arrow))
+            .then(ty.clone())
+            .map(|((params, vararg), ret)| Type::Arrow(params, vararg.map(Box::new), Box::new(ret)))
+            .labelled("function type");
+        fn_ty.or(app).or(parens).or(atom)
     })
 }
 
@@ -156,14 +167,15 @@ mod tests {
     fn parse_type_tests() {
         let cases: Vec<(&str, Type)> = vec![
             (
-                "forall[a] (a -> a)",
-                Type::Arrow(vec![Type::Var(0)], Box::new(Type::Var(0))),
+                "forall[a] fn(a) -> a",
+                Type::Arrow(vec![Type::Var(0)], None, Box::new(Type::Var(0))),
             ),
             ("int", const_("int")),
             (
-                "forall[a b] a -> b -> pair[a, b]",
+                "forall[a b] fn(a, b) -> pair[a, b]",
                 Type::Arrow(
                     vec![Type::Var(0), Type::Var(1)],
+                    None,
                     Box::new(Type::App(
                         Box::new(const_("pair")),
                         vec![Type::Var(0), Type::Var(1)],
@@ -171,8 +183,12 @@ mod tests {
                 ),
             ),
             (
-                "forall[a b] a -> b -> b",
-                Type::Arrow(vec![Type::Var(0), Type::Var(1)], Box::new(Type::Var(1))),
+                "forall[a b] fn(a, b) -> b",
+                Type::Arrow(
+                    vec![Type::Var(0), Type::Var(1)],
+                    None,
+                    Box::new(Type::Var(1)),
+                ),
             ),
             ("bool", const_("bool")),
             (
@@ -185,10 +201,14 @@ mod tests {
             // ("forall[a] (a, a) -> bool"),
             // ("forall[a] list[a -> a]"),
             (
-                "list[int -> int]",
+                "list[fn(int) -> int]",
                 Type::App(
                     Box::new(const_("list")),
-                    vec![Type::Arrow(vec![const_("int")], Box::new(const_("int")))],
+                    vec![Type::Arrow(
+                        vec![const_("int")],
+                        None,
+                        Box::new(const_("int")),
+                    )],
                 ),
             ),
             // ("forall[a b] ((a -> a) -> b) -> b"),
@@ -201,7 +221,7 @@ mod tests {
         ];
         let env = Env::default();
         for (input, expected) in cases {
-            let (vars, ty) = parse(input).unwrap();
+            let (vars, ty) = parse(input).expect(&format!("input: {}", input));
             let mut env = env.clone();
             let actual = env.replace_ty_constants_with_vars(vars, ty);
             assert_eq!(expected, actual, "input: {}", input);
