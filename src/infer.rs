@@ -241,7 +241,14 @@ impl Env {
                     Value::IOFunc(_) => Ok(Type::Const("io-func".to_owned())),
                     Value::Port(_) => Ok(Type::Const("port".to_owned())),
                 },
-                [Value::Atom(atom), pred, conseq, alt] if atom == "if" => todo!(),
+                [Value::Atom(atom), pred, conseq, alt] if atom == "if" => {
+                    let pred_ty = self.infer(level, pred)?;
+                    self.unify(&pred_ty, &Type::Const(BOOL.to_owned()))?;
+                    let conseq_ty = self.infer(level, conseq)?;
+                    let alt_ty = self.infer(level, alt)?;
+                    self.unify(&conseq_ty, &alt_ty)?;
+                    Ok(conseq_ty)
+                }
                 [Value::Atom(atom), Value::Atom(var), form] if atom == "set!" => todo!(),
                 [Value::Atom(atom), Value::Atom(var), form] if atom == "define" => {
                     let var_ty = self.infer(level + 1, form)?;
@@ -613,7 +620,7 @@ mod tests {
             ("(>= 3 3)", "bool"),
             ("(string=? \"test\" \"test\")", "bool"),
             ("(string<? \"abc\" \"bba\")", "bool"),
-            // ("(if (> 2 3) \"no\" \"yes\")", Ok("\"yes\"")),
+            ("(if (> 2 3) \"no\" \"yes\")", "string"),
             // ("(if (= 3 3) (+ 2 3 (- 5 1)) \"unequal\")", Ok("9")),
             // ("(cdr '(a simple test))", Ok("(simple test)")),
             // ("(car (cdr '(a simple test)))", Ok("simple")),
