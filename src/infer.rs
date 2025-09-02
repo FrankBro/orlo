@@ -727,6 +727,25 @@ mod tests {
         Expected::Fail(e)
     }
 
+    fn run(input: &str, expected: &str, mut env: Env) {
+        let (vars, ty) = crate::typing::parse(expected).unwrap();
+        let expected = env.replace_ty_constants_with_vars(vars, ty);
+        let value = parse(input).unwrap();
+        let actual = env
+            .infer_value(&value)
+            .expect(&format!("input: {}, value: {:?}", input, value));
+        env.generalize(-1, &actual).unwrap();
+        let expected = env.ty_to_string(&expected).unwrap();
+        let actual = env.ty_to_string(&actual).unwrap();
+        assert_eq!(actual, expected, "input: {}, value: {}", input, value);
+    }
+
+    #[test]
+    fn debug() {
+        let env = Env::primitive_bindings();
+        run("(cdr '(1 2))", "(int)", env);
+    }
+
     #[test]
     fn infer() {
         let cases: Vec<(&str, &str)> = vec![
@@ -803,17 +822,8 @@ mod tests {
         ];
         let env = Env::primitive_bindings();
         for (input, expected) in cases {
-            let (vars, ty) = crate::typing::parse(expected).unwrap();
-            let mut env = env.clone();
-            let expected = env.replace_ty_constants_with_vars(vars, ty);
-            let value = parse(input).unwrap();
-            let actual = env
-                .infer_value(&value)
-                .expect(&format!("input: {}, value: {:?}", input, value));
-            env.generalize(-1, &actual).unwrap();
-            let expected = env.ty_to_string(&expected).unwrap();
-            let actual = env.ty_to_string(&actual).unwrap();
-            assert_eq!(actual, expected, "input: {}, value: {}", input, value);
+            let env = env.clone();
+            run(input, expected, env);
         }
     }
 }
