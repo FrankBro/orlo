@@ -19,6 +19,7 @@ pub enum Error {
     ExpectedAFunction,
     RecursiveType,
     CannotUnify(Type, Type),
+    CannotUnifyList(Type, Type),
 }
 
 type Result<T> = std::result::Result<T, Error>;
@@ -27,49 +28,6 @@ type Result<T> = std::result::Result<T, Error>;
 pub struct Env {
     vars: HashMap<String, Type>,
     tvars: Vec<TypeVar>,
-}
-
-fn primitive_function(f: &PrimitiveFunc) -> Type {
-    match f {
-        PrimitiveFunc::Add
-        | PrimitiveFunc::Sub
-        | PrimitiveFunc::Mul
-        | PrimitiveFunc::Div
-        | PrimitiveFunc::Rem => Type::Arrow(
-            vec![],
-            Some(Box::new(Type::Const(INT.to_owned()))),
-            Box::new(Type::Const(INT.to_owned())),
-        ),
-        PrimitiveFunc::Eq
-        | PrimitiveFunc::Lt
-        | PrimitiveFunc::Gt
-        | PrimitiveFunc::Ne
-        | PrimitiveFunc::Ge
-        | PrimitiveFunc::Le => Type::Arrow(
-            vec![],
-            Some(Box::new(Type::Const(INT.to_owned()))),
-            Box::new(Type::Const(BOOL.to_owned())),
-        ),
-        PrimitiveFunc::And | PrimitiveFunc::Or => Type::Arrow(
-            vec![],
-            Some(Box::new(Type::Const(BOOL.to_owned()))),
-            Box::new(Type::Const(BOOL.to_owned())),
-        ),
-        PrimitiveFunc::StringEq
-        | PrimitiveFunc::StringLt
-        | PrimitiveFunc::StringGt
-        | PrimitiveFunc::StringLe
-        | PrimitiveFunc::StringGe => Type::Arrow(
-            vec![],
-            Some(Box::new(Type::Const(STRING.to_owned()))),
-            Box::new(Type::Const(BOOL.to_owned())),
-        ),
-        PrimitiveFunc::Car => todo!(),
-        PrimitiveFunc::Cdr => todo!(),
-        PrimitiveFunc::Cons => todo!(),
-        PrimitiveFunc::Eqv => todo!(),
-        PrimitiveFunc::Equal => todo!(),
-    }
 }
 
 impl Env {
@@ -161,6 +119,51 @@ impl Env {
         }
     }
 
+    fn match_list_ty(&self, ty: &Type) -> Result<(Vec<Type>, Box<Type>)> {
+        match ty {
+            Type::ListExtend(heads, tail) => {
+                let mut heads = heads.clone();
+                let (tail_heads, tail) = self.match_list_ty(&tail)?;
+                for head in tail_heads {
+                    heads.push(head);
+                }
+                Ok((heads, tail))
+            }
+            Type::Var(id) => {
+                let tvar = self.get_tvar(*id)?;
+                match tvar {
+                    TypeVar::Link(ty) => self.match_list_ty(&ty),
+                    _ => Ok((Vec::new(), Box::new(ty.clone()))),
+                }
+            }
+            Type::ListNil => Ok((vec![], Box::new(Type::ListNil))),
+            _ => Err(Error::CannotUnifyList(ty.clone(), ty.clone())),
+        }
+    }
+
+    fn unify_list(&mut self, ty1: &Type, ty2: &Type) -> Result<()> {
+        let (heads1, tail1) = self.match_list_ty(ty1)?;
+        let (heads2, tail2) = self.match_list_ty(ty2)?;
+
+        if heads1.is_empty() && heads2.is_empty() {
+            return self.unify(&tail1, &tail2);
+        }
+
+        for i in 0..std::cmp::min(heads1.len(), heads2.len()) {
+            let head1 = &heads1[i];
+            let head2 = &heads2[i];
+            self.unify(head1, head2)?;
+        }
+
+        if heads1.len() > heads2.len() {
+            self.unify(&ty1, &Type::ListExtend(heads1, tail2))
+        } else if heads2.len() > heads1.len() {
+            self.unify(&ty2, &Type::ListExtend(heads2, tail1))
+        } else {
+            Ok(())
+        }
+    }
+
     fn unify(&mut self, ty1: &Type, ty2: &Type) -> Result<()> {
         if ty1 == ty2 {
             return Ok(());
@@ -194,6 +197,12 @@ impl Env {
                     }
                 }
                 self.unify(ret1, ret2)
+            }
+            (Type::ListNil, Type::ListNil) => Ok(()),
+            (Type::ListExtend(_, _), Type::ListExtend(_, _)) => self.unify_list(ty1, ty2),
+            (Type::ListExtend(heads, _), Type::ListNil)
+            | (Type::ListNil, Type::ListExtend(heads, _)) => {
+                Err(Error::CannotUnifyList(ty1.clone(), ty2.clone()))
             }
             (Type::Var(id1), Type::Var(id2)) if id1 == id2 => {
                 panic!("multiple instance of a type variable")
@@ -233,12 +242,27 @@ impl Env {
             Value::Number(_) => Ok(Type::Const(INT.to_owned())),
             Value::String(_) => Ok(Type::Const(STRING.to_owned())),
             Value::Bool(_) => Ok(Type::Const(BOOL.to_owned())),
-            Value::PrimitiveFunc(f) => Ok(primitive_function(f)),
+            Value::PrimitiveFunc(f) => unreachable!("will never reach"),
             Value::List(vals) => match &vals[..] {
                 [Value::Atom(atom), val] if atom == QUOTE => match val {
                     Value::Atom(_) => Ok(Type::Const(SYMBOL.to_owned())),
-                    Value::List(_) => Ok(Type::Const("list".to_owned())),
-                    Value::DottedList(_, _) => Ok(Type::Const("dotted-list".to_owned())),
+                    Value::List(vals) => {
+                        let mut heads = Vec::with_capacity(vals.len());
+                        for val in vals {
+                            let head_ty = self.infer(level, val)?;
+                            heads.push(head_ty);
+                        }
+                        Ok(Type::ListExtend(heads, Box::new(Type::ListNil)))
+                    }
+                    Value::DottedList(heads, tail) => {
+                        let mut head_tys = Vec::with_capacity(heads.len());
+                        for head in heads {
+                            let head_ty = self.infer(level, head)?;
+                            head_tys.push(head_ty);
+                        }
+                        let tail_ty = self.infer(level, tail)?;
+                        Ok(Type::ListExtend(head_tys, Box::new(tail_ty)))
+                    }
                     Value::Number(_) => Ok(Type::Const("number".to_owned())),
                     Value::String(_) => Ok(Type::Const("string".to_owned())),
                     Value::Bool(_) => Ok(Type::Const("bool".to_owned())),
@@ -530,6 +554,10 @@ impl Env {
                     let head = self.ty_to_string_impl(namer, head)?;
                     ty_str.push_str(&head);
                 }
+                if tail.as_ref() == &Type::ListNil {
+                    ty_str.push(')');
+                    return Ok(ty_str);
+                }
                 ty_str.push_str(" . ");
                 let tail = self.ty_to_string_impl(namer, tail)?;
                 ty_str.push_str(&tail);
@@ -542,7 +570,7 @@ impl Env {
     pub fn primitive_bindings() -> Self {
         let mut env = Env::default();
         fn define_primitive_func(env: &mut Env, name: &str, func: PrimitiveFunc) {
-            let ty = primitive_function(&func);
+            let ty = env.infer_primitive_function(&func);
             env.vars.insert(name.to_owned(), ty);
         }
         define_primitive_func(&mut env, "+", PrimitiveFunc::Add);
@@ -565,9 +593,9 @@ impl Env {
         define_primitive_func(&mut env, "string>?", PrimitiveFunc::StringGt);
         define_primitive_func(&mut env, "string<=?", PrimitiveFunc::StringLe);
         define_primitive_func(&mut env, "string>=?", PrimitiveFunc::StringGe);
-        // define_primitive_func(&mut env, "car", PrimitiveFunc::Car);
-        // define_primitive_func(&mut env, "cdr", PrimitiveFunc::Cdr);
-        // define_primitive_func(&mut env, "cons", PrimitiveFunc::Cons);
+        define_primitive_func(&mut env, "car", PrimitiveFunc::Car);
+        define_primitive_func(&mut env, "cdr", PrimitiveFunc::Cdr);
+        define_primitive_func(&mut env, "cons", PrimitiveFunc::Cons);
         // define_primitive_func(&mut env, "eq?", PrimitiveFunc::Eqv);
         // define_primitive_func(&mut env, "eqv?", PrimitiveFunc::Eqv);
         // define_primitive_func(&mut env, "equal?", PrimitiveFunc::Equal);
@@ -581,6 +609,72 @@ impl Env {
         // define_io_func(&mut env, "read-contents", IOFunc::ReadContents);
         // define_io_func(&mut env, "read-all", IOFunc::ReadAll);
         env
+    }
+
+    fn infer_primitive_function(&mut self, f: &PrimitiveFunc) -> Type {
+        match f {
+            PrimitiveFunc::Add
+            | PrimitiveFunc::Sub
+            | PrimitiveFunc::Mul
+            | PrimitiveFunc::Div
+            | PrimitiveFunc::Rem => Type::Arrow(
+                vec![],
+                Some(Box::new(Type::Const(INT.to_owned()))),
+                Box::new(Type::Const(INT.to_owned())),
+            ),
+            PrimitiveFunc::Eq
+            | PrimitiveFunc::Lt
+            | PrimitiveFunc::Gt
+            | PrimitiveFunc::Ne
+            | PrimitiveFunc::Ge
+            | PrimitiveFunc::Le => Type::Arrow(
+                vec![],
+                Some(Box::new(Type::Const(INT.to_owned()))),
+                Box::new(Type::Const(BOOL.to_owned())),
+            ),
+            PrimitiveFunc::And | PrimitiveFunc::Or => Type::Arrow(
+                vec![],
+                Some(Box::new(Type::Const(BOOL.to_owned()))),
+                Box::new(Type::Const(BOOL.to_owned())),
+            ),
+            PrimitiveFunc::StringEq
+            | PrimitiveFunc::StringLt
+            | PrimitiveFunc::StringGt
+            | PrimitiveFunc::StringLe
+            | PrimitiveFunc::StringGe => Type::Arrow(
+                vec![],
+                Some(Box::new(Type::Const(STRING.to_owned()))),
+                Box::new(Type::Const(BOOL.to_owned())),
+            ),
+            PrimitiveFunc::Car => {
+                let a = self.new_generic_tvar();
+                Type::Arrow(
+                    vec![Type::ListExtend(vec![a.clone()], Box::new(Type::Var(1)))],
+                    None,
+                    Box::new(a),
+                )
+            }
+            PrimitiveFunc::Cdr => {
+                let a = self.new_generic_tvar();
+                let b = self.new_generic_tvar();
+                Type::Arrow(
+                    vec![Type::ListExtend(vec![a.clone()], Box::new(b.clone()))],
+                    None,
+                    Box::new(Type::ListExtend(vec![], Box::new(b))),
+                )
+            }
+            PrimitiveFunc::Cons => {
+                let a = self.new_generic_tvar();
+                let b = self.new_generic_tvar();
+                Type::Arrow(
+                    vec![a.clone(), Type::ListExtend(vec![], Box::new(b.clone()))],
+                    None,
+                    Box::new(Type::ListExtend(vec![a], Box::new(b))),
+                )
+            }
+            PrimitiveFunc::Eqv => todo!(),
+            PrimitiveFunc::Equal => todo!(),
+        }
     }
 }
 
@@ -648,6 +742,9 @@ mod tests {
             ("(string=? \"test\" \"test\")", "bool"),
             ("(string<? \"abc\" \"bba\")", "bool"),
             ("(if (> 2 3) \"no\" \"yes\")", "string"),
+            ("'()", "()"),
+            ("'(1 2)", "(int int)"),
+            ("(car '(1 2))", "int"),
             // ("(if (= 3 3) (+ 2 3 (- 5 1)) \"unequal\")", Ok("9")),
             // ("(cdr '(a simple test))", Ok("(simple test)")),
             // ("(car (cdr '(a simple test)))", Ok("simple")),

@@ -123,9 +123,12 @@ where
                     .or_not()
                     .map(|opt| opt.map(Box::new)),
             )
-            .map(|(heads, tail)| match tail {
-                Some(tail) => Type::ListExtend(heads, tail),
-                None => Type::ListNil,
+            .map(|(heads, tail)| {
+                if heads.is_empty() && tail.is_none() {
+                    return Type::ListNil;
+                }
+                let tail = tail.unwrap_or(Box::new(Type::ListNil));
+                Type::ListExtend(heads, tail)
             })
             .labelled("list type");
         let paren = just(Token::LParen)
@@ -179,6 +182,10 @@ mod tests {
         Type::Const(name.to_owned())
     }
 
+    fn int() -> Type {
+        const_("int")
+    }
+
     #[test]
     fn parse_type_tests() {
         let cases: Vec<(&str, Type)> = vec![
@@ -227,13 +234,17 @@ mod tests {
                     )],
                 ),
             ),
-            // ("forall[a b] ((a -> a) -> b) -> b"),
-            // ("forall[a b] (a -> a -> b) -> a -> b"),
-            // ("forall[a b] (a -> b) -> a -> b"),
-            // ("forall[a b] a -> b -> a"),
-            // ("forall[a b c] ((a -> b) -> c) -> (a -> b) -> a -> b"),
-            // ("forall[a b] (a -> b) -> (a -> b, a) -> bool"),
-            // ("forall[a b] (a -> b, a) -> b"),
+            ("()", Type::ListNil),
+            (
+                "(int int)",
+                Type::ListExtend(vec![int(), int()], Box::new(Type::ListNil)),
+            ), // ("forall[a b] ((a -> a) -> b) -> b"),
+               // ("forall[a b] (a -> a -> b) -> a -> b"),
+               // ("forall[a b] (a -> b) -> a -> b"),
+               // ("forall[a b] a -> b -> a"),
+               // ("forall[a b c] ((a -> b) -> c) -> (a -> b) -> a -> b"),
+               // ("forall[a b] (a -> b) -> (a -> b, a) -> bool"),
+               // ("forall[a b] (a -> b, a) -> b"),
         ];
         let env = Env::default();
         for (input, expected) in cases {
