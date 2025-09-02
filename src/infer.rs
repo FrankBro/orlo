@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, f64::consts::TAU};
 
 use crate::{
     typing::{Id, Level, Type, TypeVar, replace_ty_constants_with_vars},
@@ -151,7 +151,13 @@ impl Env {
                 }
                 self.occurs_check_adjust_levels(tvar_id, tvar_level, ret)
             }
-            Type::Const(_) => Ok(()),
+            Type::ListExtend(heads, tail) => {
+                for head in heads {
+                    self.occurs_check_adjust_levels(tvar_id, tvar_level, head)?;
+                }
+                self.occurs_check_adjust_levels(tvar_id, tvar_level, tail)
+            }
+            Type::Const(_) | Type::ListNil => Ok(()),
         }
     }
 
@@ -339,7 +345,13 @@ impl Env {
                 }
                 self.generalize(level, ret)
             }
-            Type::Const(_) => Ok(()),
+            Type::ListExtend(heads, tail) => {
+                for head in heads {
+                    self.generalize(level, head)?;
+                }
+                self.generalize(level, tail)
+            }
+            Type::Const(_) | Type::ListNil => Ok(()),
         }
     }
 
@@ -394,6 +406,16 @@ impl Env {
                     instantiated_vararg,
                     Box::new(instantiated_ret),
                 ))
+            }
+            Type::ListNil => Ok(Type::ListNil),
+            Type::ListExtend(heads, tail) => {
+                let mut instantiated_heads = Vec::with_capacity(heads.len());
+                for head in heads {
+                    let instantiated_head = self.instantiate_impl(id_vars, level, head)?;
+                    instantiated_heads.push(instantiated_head);
+                }
+                let tail = self.instantiate_impl(id_vars, level, *tail)?;
+                Ok(Type::ListExtend(instantiated_heads, Box::new(tail)))
             }
         }
     }
@@ -450,53 +472,41 @@ impl Env {
 
     pub fn ty_to_string(&self, ty: &Type) -> Result<String> {
         let mut namer = Namer::new();
-        self.ty_to_string_impl(&mut namer, ty, false)
+        self.ty_to_string_impl(&mut namer, ty)
     }
 
-    fn ty_to_string_impl(&self, namer: &mut Namer, ty: &Type, is_simple: bool) -> Result<String> {
+    fn ty_to_string_impl(&self, namer: &mut Namer, ty: &Type) -> Result<String> {
         match ty {
             Type::Const(name) => Ok(name.to_string()),
             Type::App(ty, args) => {
-                let mut ty_str = self.ty_to_string_impl(namer, ty, true)?;
+                let mut ty_str = self.ty_to_string_impl(namer, ty)?;
                 ty_str.push('[');
                 for (i, arg) in args.iter().enumerate() {
                     if i != 0 {
                         ty_str.push_str(", ")
                     }
-                    let arg = self.ty_to_string_impl(namer, arg, false)?;
+                    let arg = self.ty_to_string_impl(namer, arg)?;
                     ty_str.push_str(&arg);
                 }
                 ty_str.push(']');
                 Ok(ty_str)
             }
             Type::Arrow(params, vararg, ret) => {
-                let mut ty_str = if is_simple {
-                    "(".to_owned()
-                } else {
-                    "".to_owned()
-                };
-                if params.len() == 1 {
-                    let param = self.ty_to_string_impl(namer, &params[0], true)?;
-                    let ret = self.ty_to_string_impl(namer, ret, false)?;
+                let mut ty_str = "(λ".to_owned();
+                for (i, param) in params.iter().enumerate() {
+                    ty_str.push_str(" ");
+                    let param = self.ty_to_string_impl(namer, param)?;
                     ty_str.push_str(&param);
-                    ty_str.push_str(" -> ");
-                    ty_str.push_str(&ret);
-                } else {
-                    ty_str.push('(');
-                    for (i, param) in params.iter().enumerate() {
-                        if i != 0 {
-                            ty_str.push_str(", ");
-                        }
-                        let param = self.ty_to_string_impl(namer, param, false)?;
-                        ty_str.push_str(&param);
-                    }
-                    let ret = self.ty_to_string_impl(namer, ret, false)?;
-                    ty_str.push_str(") -> ");
-                    ty_str.push_str(&ret);
                 }
-                if is_simple {
-                    ty_str.push(')');
+                if let Some(vararg) = vararg {
+                    ty_str.push_str(" . ");
+                    let vararg = self.ty_to_string_impl(namer, vararg)?;
+                    ty_str.push_str(&vararg);
                 }
+                let ret = self.ty_to_string_impl(namer, ret)?;
+                ty_str.push_str(" -> ");
+                ty_str.push_str(&ret);
+                ty_str.push(')');
                 Ok(ty_str)
             }
             Type::Var(id) => {
@@ -507,8 +517,24 @@ impl Env {
                         Ok(name.to_string())
                     }
                     TypeVar::Unbound(_) => Ok(format!("_{}", id)),
-                    TypeVar::Link(ty) => self.ty_to_string_impl(namer, ty, is_simple),
+                    TypeVar::Link(ty) => self.ty_to_string_impl(namer, ty),
                 }
+            }
+            Type::ListNil => Ok("()".to_owned()),
+            Type::ListExtend(heads, tail) => {
+                let mut ty_str = "(".to_owned();
+                for (i, head) in heads.iter().enumerate() {
+                    if i != 0 {
+                        ty_str.push_str(" ");
+                    }
+                    let head = self.ty_to_string_impl(namer, head)?;
+                    ty_str.push_str(&head);
+                }
+                ty_str.push_str(" . ");
+                let tail = self.ty_to_string_impl(namer, tail)?;
+                ty_str.push_str(&tail);
+                ty_str.push(')');
+                Ok(ty_str)
             }
         }
     }
@@ -583,6 +609,7 @@ impl Namer {
         name as char
     }
 }
+
 #[cfg(test)]
 mod tests {
     use crate::{
