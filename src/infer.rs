@@ -149,10 +149,13 @@ impl Env {
             return self.unify(&tail1, &tail2);
         }
 
-        for i in 0..std::cmp::min(heads1.len(), heads2.len()) {
+        let mut i = 0;
+        let min = std::cmp::min(heads1.len(), heads2.len());
+        while i < min {
             let head1 = &heads1[i];
             let head2 = &heads2[i];
             self.unify(head1, head2)?;
+            i += 1;
         }
 
         if heads1.len() > heads2.len() {
@@ -160,7 +163,7 @@ impl Env {
         } else if heads2.len() > heads1.len() {
             self.unify(&ty2, &Type::ListExtend(heads2, tail1))
         } else {
-            Ok(())
+            self.unify(&tail1, &tail2)
         }
     }
 
@@ -200,8 +203,7 @@ impl Env {
             }
             (Type::ListNil, Type::ListNil) => Ok(()),
             (Type::ListExtend(_, _), Type::ListExtend(_, _)) => self.unify_list(ty1, ty2),
-            (Type::ListExtend(heads, _), Type::ListNil)
-            | (Type::ListNil, Type::ListExtend(heads, _)) => {
+            (Type::ListExtend(_, _), Type::ListNil) | (Type::ListNil, Type::ListExtend(_, _)) => {
                 Err(Error::CannotUnifyList(ty1.clone(), ty2.clone()))
             }
             (Type::Var(id1), Type::Var(id2)) if id1 == id2 => {
@@ -546,6 +548,10 @@ impl Env {
             }
             Type::ListNil => Ok("()".to_owned()),
             Type::ListExtend(heads, tail) => {
+                if heads.is_empty() {
+                    let tail = self.ty_to_string_impl(namer, tail)?;
+                    return Ok(tail);
+                }
                 let mut ty_str = "(".to_owned();
                 for (i, head) in heads.iter().enumerate() {
                     if i != 0 {
@@ -554,7 +560,7 @@ impl Env {
                     let head = self.ty_to_string_impl(namer, head)?;
                     ty_str.push_str(&head);
                 }
-                if tail.as_ref() == &Type::ListNil {
+                if self.is_nil(tail) {
                     ty_str.push(')');
                     return Ok(ty_str);
                 }
@@ -564,6 +570,20 @@ impl Env {
                 ty_str.push(')');
                 Ok(ty_str)
             }
+        }
+    }
+
+    fn is_nil(&self, tail: &Type) -> bool {
+        match tail {
+            Type::ListNil => true,
+            Type::Var(id) => {
+                let tvar = self.get_tvar(*id).unwrap();
+                match tvar {
+                    TypeVar::Link(ty) => self.is_nil(ty),
+                    _ => false,
+                }
+            }
+            _ => false,
         }
     }
 
@@ -647,20 +667,21 @@ impl Env {
                 Box::new(Type::Const(BOOL.to_owned())),
             ),
             PrimitiveFunc::Car => {
-                let a = self.new_generic_tvar();
+                let head = self.new_generic_tvar();
+                let tail = self.new_generic_tvar();
                 Type::Arrow(
-                    vec![Type::ListExtend(vec![a.clone()], Box::new(Type::Var(1)))],
+                    vec![Type::ListExtend(vec![head.clone()], Box::new(tail))],
                     None,
-                    Box::new(a),
+                    Box::new(head),
                 )
             }
             PrimitiveFunc::Cdr => {
-                let a = self.new_generic_tvar();
-                let b = self.new_generic_tvar();
+                let head = self.new_generic_tvar();
+                let tail = self.new_generic_tvar();
                 Type::Arrow(
-                    vec![Type::ListExtend(vec![a.clone()], Box::new(b.clone()))],
+                    vec![Type::ListExtend(vec![head], Box::new(tail.clone()))],
                     None,
-                    Box::new(Type::ListExtend(vec![], Box::new(b))),
+                    Box::new(tail),
                 )
             }
             PrimitiveFunc::Cons => {
@@ -741,9 +762,9 @@ mod tests {
     }
 
     #[test]
-    fn debug() {
+    fn cdr_test() {
         let env = Env::primitive_bindings();
-        run("(cdr '(1 2))", "(int)", env);
+        run("(cdr '(1 2 3))", "(int int)", env);
     }
 
     #[test]
@@ -764,6 +785,10 @@ mod tests {
             ("'()", "()"),
             ("'(1 2)", "(int int)"),
             ("(car '(1 2))", "int"),
+            ("(cdr '(1 2))", "(int)"),
+            ("'(\"a\" 1 #t)", "(string int bool)"),
+            ("(car '(\"a\" 1 #t))", "string"),
+            ("(cdr '(\"a\" 1 #t))", "(int bool)"),
             // ("(if (= 3 3) (+ 2 3 (- 5 1)) \"unequal\")", Ok("9")),
             // ("(cdr '(a simple test))", Ok("(simple test)")),
             // ("(car (cdr '(a simple test)))", Ok("simple")),

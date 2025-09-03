@@ -112,23 +112,19 @@ where
             .then(just(Token::Arrow).ignore_then(ty.clone()))
             .map(|((params, vararg), ret)| Type::Arrow(params, vararg.map(Box::new), Box::new(ret)))
             .labelled("function type");
+        // TODO: You can't have ( . ())
         let list = ty
             .clone()
             .repeated()
             .at_least(0)
             .collect::<Vec<_>>()
-            .then(
-                just(Token::Dot)
-                    .ignore_then(ty.clone())
-                    .or_not()
-                    .map(|opt| opt.map(Box::new)),
-            )
+            .then(just(Token::Dot).ignore_then(ty.clone()).or_not())
             .map(|(heads, tail)| {
                 if heads.is_empty() && tail.is_none() {
                     return Type::ListNil;
                 }
-                let tail = tail.unwrap_or(Box::new(Type::ListNil));
-                Type::ListExtend(heads, tail)
+                let tail = tail.unwrap_or(Type::ListNil);
+                Type::ListExtend(heads, Box::new(tail))
             })
             .labelled("list type");
         let paren = just(Token::LParen)
@@ -186,6 +182,14 @@ mod tests {
         const_("int")
     }
 
+    fn list(heads: Vec<Type>, tail: Option<Type>) -> Type {
+        if heads.is_empty() && tail.is_none() {
+            return Type::ListNil;
+        }
+        let tail = tail.unwrap_or(Type::ListNil);
+        Type::ListExtend(heads, Box::new(tail))
+    }
+
     #[test]
     fn parse_type_tests() {
         let cases: Vec<(&str, Type)> = vec![
@@ -235,16 +239,14 @@ mod tests {
                 ),
             ),
             ("()", Type::ListNil),
-            (
-                "(int int)",
-                Type::ListExtend(vec![int(), int()], Box::new(Type::ListNil)),
-            ), // ("forall[a b] ((a -> a) -> b) -> b"),
-               // ("forall[a b] (a -> a -> b) -> a -> b"),
-               // ("forall[a b] (a -> b) -> a -> b"),
-               // ("forall[a b] a -> b -> a"),
-               // ("forall[a b c] ((a -> b) -> c) -> (a -> b) -> a -> b"),
-               // ("forall[a b] (a -> b) -> (a -> b, a) -> bool"),
-               // ("forall[a b] (a -> b, a) -> b"),
+            ("(int int)", list(vec![int(), int()], None)),
+            // ("forall[a b] ((a -> a) -> b) -> b"),
+            // ("forall[a b] (a -> a -> b) -> a -> b"),
+            // ("forall[a b] (a -> b) -> a -> b"),
+            // ("forall[a b] a -> b -> a"),
+            // ("forall[a b c] ((a -> b) -> c) -> (a -> b) -> a -> b"),
+            // ("forall[a b] (a -> b) -> (a -> b, a) -> bool"),
+            // ("forall[a b] (a -> b, a) -> b"),
         ];
         let env = Env::default();
         for (input, expected) in cases {
