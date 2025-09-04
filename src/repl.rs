@@ -9,7 +9,7 @@ fn print(line: &str) {
 
 pub fn run() {
     let mut env = Env::primitive_bindings();
-    print("Lisp>>> ");
+    print("orlo>>> ");
     let stdin = io::stdin();
     let mut type_env = infer::Env::primitive_bindings();
     for line in stdin.lock().lines() {
@@ -29,6 +29,6 @@ pub fn run() {
             }
             Err(e) => println!("Parse error: {:?}", e),
         }
-        print("Lisp>>> ");
+        print("orlo>>> ");
     }
 }
