@@ -1,4 +1,4 @@
-use std::{collections::HashMap, f64::consts::TAU};
+use std::collections::HashMap;
 
 use crate::{
     typing::{Id, Level, Type, TypeVar, replace_ty_constants_with_vars},
@@ -109,61 +109,23 @@ impl Env {
                 }
                 self.occurs_check_adjust_levels(tvar_id, tvar_level, ret)
             }
-            Type::ListExtend(heads, tail) => {
-                for head in heads {
-                    self.occurs_check_adjust_levels(tvar_id, tvar_level, head)?;
-                }
+            Type::ListCons(head, tail) => {
+                self.occurs_check_adjust_levels(tvar_id, tvar_level, head)?;
                 self.occurs_check_adjust_levels(tvar_id, tvar_level, tail)
             }
             Type::Const(_) | Type::ListNil => Ok(()),
         }
     }
 
-    fn match_list_ty(&self, ty: &Type) -> Result<(Vec<Type>, Box<Type>)> {
-        match ty {
-            Type::ListExtend(heads, tail) => {
-                let mut heads = heads.clone();
-                let (tail_heads, tail) = self.match_list_ty(&tail)?;
-                for head in tail_heads {
-                    heads.push(head);
-                }
-                Ok((heads, tail))
-            }
-            Type::Var(id) => {
-                let tvar = self.get_tvar(*id)?;
-                match tvar {
-                    TypeVar::Link(ty) => self.match_list_ty(&ty),
-                    _ => Ok((Vec::new(), Box::new(ty.clone()))),
-                }
-            }
-            Type::ListNil => Ok((vec![], Box::new(Type::ListNil))),
-            _ => Err(Error::CannotUnifyList(ty.clone(), ty.clone())),
-        }
-    }
-
     fn unify_list(&mut self, ty1: &Type, ty2: &Type) -> Result<()> {
-        let (heads1, tail1) = self.match_list_ty(ty1)?;
-        let (heads2, tail2) = self.match_list_ty(ty2)?;
-
-        if heads1.is_empty() && heads2.is_empty() {
-            return self.unify(&tail1, &tail2);
-        }
-
-        let mut i = 0;
-        let min = std::cmp::min(heads1.len(), heads2.len());
-        while i < min {
-            let head1 = &heads1[i];
-            let head2 = &heads2[i];
-            self.unify(head1, head2)?;
-            i += 1;
-        }
-
-        if heads1.len() > heads2.len() {
-            self.unify(&ty1, &Type::ListExtend(heads1, tail2))
-        } else if heads2.len() > heads1.len() {
-            self.unify(&ty2, &Type::ListExtend(heads2, tail1))
-        } else {
-            self.unify(&tail1, &tail2)
+        match (ty1, ty2) {
+            (Type::ListNil, Type::ListNil) => Ok(()),
+            (Type::ListCons(head1, tail1), Type::ListCons(head2, tail2)) => {
+                self.unify(head1, head2)?;
+                self.unify_list(tail1, tail2)
+            }
+            (Type::Var(_), _) | (_, Type::Var(_)) => self.unify(ty1, ty2),
+            _ => Err(Error::CannotUnifyList(ty1.clone(), ty2.clone())),
         }
     }
 
@@ -202,8 +164,8 @@ impl Env {
                 self.unify(ret1, ret2)
             }
             (Type::ListNil, Type::ListNil) => Ok(()),
-            (Type::ListExtend(_, _), Type::ListExtend(_, _)) => self.unify_list(ty1, ty2),
-            (Type::ListExtend(_, _), Type::ListNil) | (Type::ListNil, Type::ListExtend(_, _)) => {
+            (Type::ListCons(_, _), Type::ListCons(_, _)) => self.unify_list(ty1, ty2),
+            (Type::ListCons(_, _), Type::ListNil) | (Type::ListNil, Type::ListCons(_, _)) => {
                 Err(Error::CannotUnifyList(ty1.clone(), ty2.clone()))
             }
             (Type::Var(id1), Type::Var(id2)) if id1 == id2 => {
@@ -249,21 +211,20 @@ impl Env {
                 [Value::Atom(atom), val] if atom == QUOTE => match val {
                     Value::Atom(_) => Ok(Type::Const(SYMBOL.to_owned())),
                     Value::List(vals) => {
-                        let mut heads = Vec::with_capacity(vals.len());
-                        for val in vals {
-                            let head_ty = self.infer(level, val)?;
-                            heads.push(head_ty);
+                        let mut ty = Type::ListNil;
+                        for val in vals.iter().rev() {
+                            let head = self.infer(level, val)?;
+                            ty = Type::ListCons(Box::new(head), Box::new(ty));
                         }
-                        Ok(Type::ListExtend(heads, Box::new(Type::ListNil)))
+                        Ok(ty)
                     }
-                    Value::DottedList(heads, tail) => {
-                        let mut head_tys = Vec::with_capacity(heads.len());
-                        for head in heads {
-                            let head_ty = self.infer(level, head)?;
-                            head_tys.push(head_ty);
+                    Value::DottedList(vals, tail) => {
+                        let mut ty = self.infer(level, tail)?;
+                        for val in vals.iter().rev() {
+                            let head = self.infer(level, val)?;
+                            ty = Type::ListCons(Box::new(head), Box::new(ty));
                         }
-                        let tail_ty = self.infer(level, tail)?;
-                        Ok(Type::ListExtend(head_tys, Box::new(tail_ty)))
+                        Ok(ty)
                     }
                     Value::Number(_) => Ok(Type::Const("number".to_owned())),
                     Value::String(_) => Ok(Type::Const("string".to_owned())),
@@ -371,10 +332,8 @@ impl Env {
                 }
                 self.generalize(level, ret)
             }
-            Type::ListExtend(heads, tail) => {
-                for head in heads {
-                    self.generalize(level, head)?;
-                }
+            Type::ListCons(head, tail) => {
+                self.generalize(level, head)?;
                 self.generalize(level, tail)
             }
             Type::Const(_) | Type::ListNil => Ok(()),
@@ -434,14 +393,10 @@ impl Env {
                 ))
             }
             Type::ListNil => Ok(Type::ListNil),
-            Type::ListExtend(heads, tail) => {
-                let mut instantiated_heads = Vec::with_capacity(heads.len());
-                for head in heads {
-                    let instantiated_head = self.instantiate_impl(id_vars, level, head)?;
-                    instantiated_heads.push(instantiated_head);
-                }
+            Type::ListCons(head, tail) => {
+                let head = self.instantiate_impl(id_vars, level, *head)?;
                 let tail = self.instantiate_impl(id_vars, level, *tail)?;
-                Ok(Type::ListExtend(instantiated_heads, Box::new(tail)))
+                Ok(Type::ListCons(Box::new(head), Box::new(tail)))
             }
         }
     }
@@ -547,26 +502,34 @@ impl Env {
                 }
             }
             Type::ListNil => Ok("()".to_owned()),
-            Type::ListExtend(heads, tail) => {
-                if heads.is_empty() {
-                    let tail = self.ty_to_string_impl(namer, tail)?;
-                    return Ok(tail);
-                }
+            Type::ListCons(head, tail) => {
                 let mut ty_str = "(".to_owned();
-                for (i, head) in heads.iter().enumerate() {
+                let mut i = 0;
+                let mut curr_head = head;
+                let mut curr_tail = tail;
+                loop {
                     if i != 0 {
-                        ty_str.push_str(" ");
+                        ty_str.push(' ');
                     }
-                    let head = self.ty_to_string_impl(namer, head)?;
+                    let head = self.ty_to_string_impl(namer, curr_head)?;
                     ty_str.push_str(&head);
+                    if self.is_nil(curr_tail) {
+                        break;
+                    }
+                    match curr_tail.as_ref() {
+                        Type::ListCons(next_head, next_tail) => {
+                            curr_head = next_head;
+                            curr_tail = next_tail;
+                        }
+                        _ => {
+                            ty_str.push_str(" . ");
+                            let tail = self.ty_to_string_impl(namer, curr_tail)?;
+                            ty_str.push_str(&tail);
+                            break;
+                        }
+                    }
+                    i += 1;
                 }
-                if self.is_nil(tail) {
-                    ty_str.push(')');
-                    return Ok(ty_str);
-                }
-                ty_str.push_str(" . ");
-                let tail = self.ty_to_string_impl(namer, tail)?;
-                ty_str.push_str(&tail);
                 ty_str.push(')');
                 Ok(ty_str)
             }
@@ -670,7 +633,7 @@ impl Env {
                 let head = self.new_generic_tvar();
                 let tail = self.new_generic_tvar();
                 Type::Arrow(
-                    vec![Type::ListExtend(vec![head.clone()], Box::new(tail))],
+                    vec![Type::ListCons(Box::new(head.clone()), Box::new(tail))],
                     None,
                     Box::new(head),
                 )
@@ -679,7 +642,7 @@ impl Env {
                 let head = self.new_generic_tvar();
                 let tail = self.new_generic_tvar();
                 Type::Arrow(
-                    vec![Type::ListExtend(vec![head], Box::new(tail.clone()))],
+                    vec![Type::ListCons(Box::new(head), Box::new(tail.clone()))],
                     None,
                     Box::new(tail),
                 )
@@ -688,9 +651,9 @@ impl Env {
                 let a = self.new_generic_tvar();
                 let b = self.new_generic_tvar();
                 Type::Arrow(
-                    vec![a.clone(), Type::ListExtend(vec![], Box::new(b.clone()))],
+                    vec![a.clone(), b.clone()],
                     None,
-                    Box::new(Type::ListExtend(vec![a], Box::new(b))),
+                    Box::new(Type::ListCons(Box::new(a), Box::new(b))),
                 )
             }
             PrimitiveFunc::Eqv => todo!(),

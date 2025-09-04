@@ -17,7 +17,7 @@ pub enum Type {
     Var(Id),
     // List
     ListNil,
-    ListExtend(Vec<Type>, Box<Type>),
+    ListCons(Box<Type>, Box<Type>),
 }
 
 pub fn replace_ty_constants_with_vars(env: &HashMap<String, Type>, ty: Type) -> Type {
@@ -45,13 +45,10 @@ pub fn replace_ty_constants_with_vars(env: &HashMap<String, Type>, ty: Type) -> 
             Type::Arrow(params, vararg.map(Box::new), ret)
         }
         Type::ListNil => Type::ListNil,
-        Type::ListExtend(heads, tail) => {
-            let heads = heads
-                .into_iter()
-                .map(|head| replace_ty_constants_with_vars(env, head))
-                .collect();
+        Type::ListCons(head, tail) => {
+            let head = Box::new(replace_ty_constants_with_vars(env, *head));
             let tail = Box::new(replace_ty_constants_with_vars(env, *tail));
-            Type::ListExtend(heads, tail)
+            Type::ListCons(head, tail)
         }
     }
 }
@@ -124,7 +121,9 @@ where
                     return Type::ListNil;
                 }
                 let tail = tail.unwrap_or(Type::ListNil);
-                Type::ListExtend(heads, Box::new(tail))
+                heads.into_iter().rev().fold(tail, |acc, head| {
+                    Type::ListCons(Box::new(head), Box::new(acc))
+                })
             })
             .labelled("list type");
         let paren = just(Token::LParen)
@@ -187,7 +186,9 @@ mod tests {
             return Type::ListNil;
         }
         let tail = tail.unwrap_or(Type::ListNil);
-        Type::ListExtend(heads, Box::new(tail))
+        heads.into_iter().rev().fold(tail, |acc, head| {
+            Type::ListCons(Box::new(head), Box::new(acc))
+        })
     }
 
     #[test]
