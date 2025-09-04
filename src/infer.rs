@@ -117,6 +117,7 @@ impl Env {
         }
     }
 
+    // TODO: Does this really need to be it's own function?
     fn unify_list(&mut self, ty1: &Type, ty2: &Type) -> Result<()> {
         match (ty1, ty2) {
             (Type::ListNil, Type::ListNil) => Ok(()),
@@ -124,6 +125,7 @@ impl Env {
                 self.unify(head1, head2)?;
                 self.unify_list(tail1, tail2)
             }
+            // TODO: Do we need special handling here ala row polymorphism?
             (Type::Var(_), _) | (_, Type::Var(_)) => self.unify(ty1, ty2),
             _ => Err(Error::CannotUnifyList(ty1.clone(), ty2.clone())),
         }
@@ -206,7 +208,7 @@ impl Env {
             Value::Number(_) => Ok(Type::Const(INT.to_owned())),
             Value::String(_) => Ok(Type::Const(STRING.to_owned())),
             Value::Bool(_) => Ok(Type::Const(BOOL.to_owned())),
-            Value::PrimitiveFunc(f) => unreachable!("will never reach"),
+            Value::PrimitiveFunc(_) => unreachable!("will never reach"),
             Value::List(vals) => match &vals[..] {
                 [Value::Atom(atom), val] if atom == QUOTE => match val {
                     Value::Atom(_) => Ok(Type::Const(SYMBOL.to_owned())),
