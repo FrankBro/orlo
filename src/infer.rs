@@ -20,6 +20,7 @@ pub enum Error {
     RecursiveType,
     CannotUnify(Type, Type),
     CannotUnifyList(Type, Type),
+    FunctionArgNotSymbol(String),
 }
 
 type Result<T> = std::result::Result<T, Error>;
@@ -244,7 +245,12 @@ impl Env {
                     self.unify(&conseq_ty, &alt_ty)?;
                     Ok(conseq_ty)
                 }
-                [Value::Atom(atom), Value::Atom(var), form] if atom == "set!" => todo!(),
+                [Value::Atom(atom), Value::Atom(var), form] if atom == "set!" => {
+                    let var_ty = self.infer(level + 1, form)?;
+                    let old_ty = self.get_var(var)?;
+                    self.unify(&old_ty, &var_ty)?;
+                    Ok(var_ty)
+                }
                 [Value::Atom(atom), Value::Atom(var), form] if atom == "define" => {
                     let var_ty = self.infer(level + 1, form)?;
                     self.generalize(level, &var_ty)?;
@@ -261,7 +267,33 @@ impl Env {
                 ] if atom == "define" => {
                     todo!()
                 }
-                [Value::Atom(atom), Value::List(params), body @ ..] if atom == "lambda" => todo!(),
+                [Value::Atom(atom), Value::List(params), body @ ..] if atom == "lambda" => {
+                    let mut param_tys = Vec::with_capacity(params.len());
+                    let old_vars = self.vars.clone();
+                    for param in params {
+                        let param = match param {
+                            Value::Atom(name) => name,
+                            _ => {
+                                return Err(Error::FunctionArgNotSymbol(format!(
+                                    "{:?} is not a symbol",
+                                    param
+                                )));
+                            }
+                        };
+                        let param_ty = self.new_unbound_tvar(level);
+                        self.vars.insert(param.to_owned(), param_ty.clone());
+                        param_tys.push(param_ty);
+                    }
+                    let mut ret_ty = None;
+                    for val in body {
+                        let body_ty = self.infer(level, val)?;
+                        ret_ty = Some(body_ty);
+                    }
+                    self.vars = old_vars;
+                    // TODO: void?
+                    let ret_ty = ret_ty.unwrap_or(Type::Const("void".to_owned()));
+                    Ok(Type::Arrow(param_tys, None, Box::new(ret_ty)))
+                }
                 [
                     Value::Atom(atom),
                     Value::DottedList(params, vararg),
