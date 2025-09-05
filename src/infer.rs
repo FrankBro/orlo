@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use crate::{
+    parser::parse_multiple,
     typing::{Id, Level, Type, TypeVar, replace_ty_constants_with_vars},
     value::{PrimitiveFunc, QUOTE, Value},
 };
@@ -21,6 +22,9 @@ pub enum Error {
     CannotUnify(Type, Type),
     CannotUnifyList(Type, Type),
     FunctionArgNotSymbol(String),
+    IO(std::io::ErrorKind),
+    Parser,
+    DefineFunctionNotSymbol(Value),
 }
 
 type Result<T> = std::result::Result<T, Error>;
@@ -258,7 +262,41 @@ impl Env {
                     Ok(var_ty)
                 }
                 [Value::Atom(atom), Value::List(name_args), body @ ..] if atom == "define" => {
-                    todo!()
+                    let func_name = match name_args.first() {
+                        Some(Value::Atom(name)) => name,
+                        other => {
+                            return Err(Error::DefineFunctionNotSymbol(
+                                other.cloned().unwrap_or(Value::List(vec![])),
+                            ));
+                        }
+                    };
+                    let mut param_tys = Vec::with_capacity(name_args.len() - 1);
+                    let old_vars = self.vars.clone();
+                    for param in &name_args[1..] {
+                        let param = match param {
+                            Value::Atom(name) => name,
+                            _ => {
+                                return Err(Error::FunctionArgNotSymbol(format!(
+                                    "{:?} is not a symbol",
+                                    param
+                                )));
+                            }
+                        };
+                        let param_ty = self.new_unbound_tvar(level);
+                        self.vars.insert(param.to_owned(), param_ty.clone());
+                        param_tys.push(param_ty);
+                    }
+                    let mut ret_ty = None;
+                    for val in body {
+                        let body_ty = self.infer(level, val)?;
+                        ret_ty = Some(body_ty);
+                    }
+                    self.vars = old_vars;
+                    Ok(Type::Arrow(
+                        param_tys,
+                        None,
+                        Box::new(ret_ty.unwrap_or(Type::Const("void".to_owned()))),
+                    ))
                 }
                 [
                     Value::Atom(atom),
@@ -302,7 +340,16 @@ impl Env {
                     todo!()
                 }
                 [Value::Atom(atom), Value::Atom(vararg), body @ ..] if atom == "lambda" => todo!(),
-                [Value::Atom(atom), Value::String(path)] if atom == "load" => todo!(),
+                [Value::Atom(atom), Value::String(path)] if atom == "load" => {
+                    let lines = std::fs::read_to_string(path).map_err(|e| Error::IO(e.kind()))?;
+                    let vals = parse_multiple(&lines).map_err(|_| Error::Parser)?;
+                    let mut ret = None;
+                    for val in vals {
+                        let body_ty = self.infer(level, &val)?;
+                        ret = Some(body_ty);
+                    }
+                    Ok(ret.unwrap_or(Type::Const("void".to_owned())))
+                }
                 [func, args @ ..] => {
                     let f_ty = self.infer(level, func)?;
                     let (params, vararg, ret) = self.match_fun_ty(args.len(), f_ty)?;
@@ -613,9 +660,9 @@ impl Env {
         define_primitive_func(&mut env, "car", PrimitiveFunc::Car);
         define_primitive_func(&mut env, "cdr", PrimitiveFunc::Cdr);
         define_primitive_func(&mut env, "cons", PrimitiveFunc::Cons);
-        // define_primitive_func(&mut env, "eq?", PrimitiveFunc::Eqv);
-        // define_primitive_func(&mut env, "eqv?", PrimitiveFunc::Eqv);
-        // define_primitive_func(&mut env, "equal?", PrimitiveFunc::Equal);
+        define_primitive_func(&mut env, "eq?", PrimitiveFunc::Eqv);
+        define_primitive_func(&mut env, "eqv?", PrimitiveFunc::Eqv);
+        define_primitive_func(&mut env, "equal?", PrimitiveFunc::Equal);
         // define_io_func(&mut env, "apply", IOFunc::Apply);
         // define_io_func(&mut env, "open-input-file", IOFunc::MakeReadPort);
         // define_io_func(&mut env, "open-output-file", IOFunc::MakeWritePort);
@@ -690,8 +737,22 @@ impl Env {
                     Box::new(Type::ListCons(Box::new(a), Box::new(b))),
                 )
             }
-            PrimitiveFunc::Eqv => todo!(),
-            PrimitiveFunc::Equal => todo!(),
+            PrimitiveFunc::Eqv => {
+                let a = self.new_generic_tvar();
+                Type::Arrow(
+                    vec![a.clone(), a],
+                    None,
+                    Box::new(Type::Const(BOOL.to_owned())),
+                )
+            }
+            PrimitiveFunc::Equal => {
+                let a = self.new_generic_tvar();
+                Type::Arrow(
+                    vec![a.clone(), a],
+                    None,
+                    Box::new(Type::Const(BOOL.to_owned())),
+                )
+            }
         }
     }
 }
