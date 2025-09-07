@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use crate::{
     parser::parse_multiple,
     typing::{Id, Level, Type, TypeVar, replace_ty_constants_with_vars},
-    value::{PrimitiveFunc, QUOTE, Value},
+    value::{IOFunc, PrimitiveFunc, QUOTE, Value},
 };
 
 pub static SYMBOL: &str = "symbol";
@@ -303,7 +303,54 @@ impl Env {
                     Value::DottedList(name_args, vararg),
                     body @ ..,
                 ] if atom == "define" => {
-                    todo!()
+                    let func_name = match name_args.first() {
+                        Some(Value::Atom(name)) => name,
+                        other => {
+                            return Err(Error::DefineFunctionNotSymbol(
+                                other.cloned().unwrap_or(Value::List(vec![])),
+                            ));
+                        }
+                    };
+                    let mut param_tys = Vec::with_capacity(name_args.len() - 1);
+                    let old_vars = self.vars.clone();
+                    for param in &name_args[1..] {
+                        let param = match param {
+                            Value::Atom(name) => name,
+                            _ => {
+                                return Err(Error::FunctionArgNotSymbol(format!(
+                                    "{:?} is not a symbol",
+                                    param
+                                )));
+                            }
+                        };
+                        let param_ty = self.new_unbound_tvar(level);
+                        self.vars.insert(param.to_owned(), param_ty.clone());
+                        param_tys.push(param_ty);
+                    }
+                    let vararg_ty = match vararg.as_ref() {
+                        Value::Atom(name) => {
+                            let vararg_ty = self.new_unbound_tvar(level);
+                            self.vars.insert(name.to_owned(), vararg_ty.clone());
+                            Box::new(vararg_ty)
+                        }
+                        _ => {
+                            return Err(Error::FunctionArgNotSymbol(format!(
+                                "{:?} is not a symbol",
+                                vararg
+                            )));
+                        }
+                    };
+                    let mut ret_ty = None;
+                    for val in body {
+                        let body_ty = self.infer(level, val)?;
+                        ret_ty = Some(body_ty);
+                    }
+                    self.vars = old_vars;
+                    Ok(Type::Arrow(
+                        param_tys,
+                        Some(vararg_ty),
+                        Box::new(ret_ty.unwrap_or(Type::Const("void".to_owned()))),
+                    ))
                 }
                 [Value::Atom(atom), Value::List(params), body @ ..] if atom == "lambda" => {
                     let mut param_tys = Vec::with_capacity(params.len());
@@ -637,6 +684,47 @@ impl Env {
             let ty = env.infer_primitive_function(&func);
             env.vars.insert(name.to_owned(), ty);
         }
+        fn define_io_func(env: &mut Env, name: &str, func: IOFunc) {
+            let ty = match func {
+                IOFunc::Apply => Type::Arrow(
+                    vec![Type::Const("func".to_owned()), Type::ListNil],
+                    None,
+                    Box::new(Type::Const("any".to_owned())),
+                ),
+                _ => todo!(),
+                // IOFunc::MakeReadPort | IOFunc::MakeWritePort => Type::Arrow(
+                //     vec![Type::Const(STRING.to_owned())],
+                //     None,
+                //     Box::new(Type::Const("port".to_owned())),
+                // ),
+                // IOFunc::ClosePort => Type::Arrow(
+                //     vec![Type::Const("port".to_owned())],
+                //     None,
+                //     Box::new(Type::Const(BOOL.to_owned())),
+                // ),
+                // IOFunc::Read => Type::Arrow(
+                //     vec![Type::Const("port".to_owned())],
+                //     None,
+                //     Box::new(Type::Const("any".to_owned())),
+                // ),
+                // IOFunc::Write => Type::Arrow(
+                //     vec![Type::Const("any".to_owned()), Type::Const("port".to_owned())],
+                //     None,
+                //     Box::new(Type::Const("void".to_owned())),
+                // ),
+                // IOFunc::ReadContents => Type::Arrow(
+                //     vec![Type::Const("port".to_owned())],
+                //     None,
+                //     Box::new(Type::Const(STRING.to_owned())),
+                // ),
+                // IOFunc::ReadAll => Type::Arrow(
+                //     vec![Type::Const("port".to_owned())],
+                //     None,
+                //     Box::new(Type::ListNil),
+                // ),
+            };
+            env.vars.insert(name.to_owned(), ty);
+        }
         define_primitive_func(&mut env, "+", PrimitiveFunc::Add);
         define_primitive_func(&mut env, "-", PrimitiveFunc::Sub);
         define_primitive_func(&mut env, "*", PrimitiveFunc::Mul);
@@ -663,7 +751,7 @@ impl Env {
         define_primitive_func(&mut env, "eq?", PrimitiveFunc::Eqv);
         define_primitive_func(&mut env, "eqv?", PrimitiveFunc::Eqv);
         define_primitive_func(&mut env, "equal?", PrimitiveFunc::Equal);
-        // define_io_func(&mut env, "apply", IOFunc::Apply);
+        define_io_func(&mut env, "apply", IOFunc::Apply);
         // define_io_func(&mut env, "open-input-file", IOFunc::MakeReadPort);
         // define_io_func(&mut env, "open-output-file", IOFunc::MakeWritePort);
         // define_io_func(&mut env, "close-input-port", IOFunc::ClosePort);
