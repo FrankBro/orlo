@@ -105,10 +105,8 @@ impl Env {
                 }
                 self.occurs_check_adjust_levels(tvar_id, tvar_level, ty)
             }
-            Type::Arrow(params, vararg, ret) => {
-                for param in params {
-                    self.occurs_check_adjust_levels(tvar_id, tvar_level, param)?;
-                }
+            Type::Arrow(param, vararg, ret) => {
+                self.occurs_check_adjust_levels(tvar_id, tvar_level, param)?;
                 if let Some(vararg) = vararg {
                     self.occurs_check_adjust_levels(tvar_id, tvar_level, vararg)?;
                 }
@@ -153,20 +151,12 @@ impl Env {
                 }
                 self.unify(app_ty1, app_ty2)
             }
-            (Type::Arrow(params1, vararg1, ret1), Type::Arrow(params2, vararg2, ret2)) => {
-                if params1.len() != params2.len() {
-                    return Err(Error::CannotUnify(ty1.clone(), ty2.clone()));
-                }
-                for i in 0..params1.len() {
-                    let param1 = &params1[i];
-                    let param2 = &params2[i];
-                    self.unify(param1, param2)?;
-                }
+            (Type::Arrow(param1, vararg1, ret1), Type::Arrow(param2, vararg2, ret2)) => {
+                self.unify(param1, param2)?;
                 match (vararg1, vararg2) {
                     (Some(vararg1), Some(vararg2)) => self.unify(vararg1, vararg2)?,
-                    _ => {
-                        return Err(Error::CannotUnify(ty1.clone(), ty2.clone()));
-                    }
+                    (None, None) => {}
+                    _ => return Err(Error::CannotUnify(ty1.clone(), ty2.clone())),
                 }
                 self.unify(ret1, ret2)
             }
@@ -202,6 +192,63 @@ impl Env {
             }
             _ => Err(Error::CannotUnify(ty1.clone(), ty2.clone())),
         }
+    }
+
+    fn define_arrow(
+        &mut self,
+        level: Level,
+        params: &[Value],
+        vararg: Option<&Value>,
+        body: &[Value],
+    ) -> Result<Type> {
+        let mut param_tys = Vec::with_capacity(params.len());
+        let old_vars = self.vars.clone();
+        for param in params {
+            let param = match param {
+                Value::Atom(name) => name,
+                _ => {
+                    return Err(Error::FunctionArgNotSymbol(format!(
+                        "{:?} is not a symbol",
+                        param
+                    )));
+                }
+            };
+            let param_ty = self.new_unbound_tvar(level);
+            self.vars.insert(param.to_owned(), param_ty.clone());
+            param_tys.push(param_ty);
+        }
+        let vararg_ty = match vararg.as_ref() {
+            Some(Value::Atom(name)) => {
+                let vararg_ty = self.new_unbound_tvar(level);
+                self.vars.insert(name.to_owned(), vararg_ty.clone());
+                Some(vararg_ty)
+            }
+
+            Some(_) => {
+                return Err(Error::FunctionArgNotSymbol(format!(
+                    "{:?} is not a symbol",
+                    vararg
+                )));
+            }
+            None => None,
+        };
+        let mut ret_ty = Type::Const("void".to_owned());
+        for val in body {
+            let body_ty = self.infer(level, val)?;
+            ret_ty = body_ty;
+        }
+        self.vars = old_vars;
+        let params = param_tys
+            .into_iter()
+            .rev()
+            .fold(Type::ListNil, |acc, param| {
+                Type::ListCons(Box::new(param), Box::new(acc))
+            });
+        Ok(Type::Arrow(
+            Box::new(params),
+            vararg_ty.map(Box::new),
+            Box::new(ret_ty),
+        ))
     }
 
     fn infer(&mut self, level: Level, val: &Value) -> Result<Type> {
@@ -270,33 +317,9 @@ impl Env {
                             ));
                         }
                     };
-                    let mut param_tys = Vec::with_capacity(name_args.len() - 1);
-                    let old_vars = self.vars.clone();
-                    for param in &name_args[1..] {
-                        let param = match param {
-                            Value::Atom(name) => name,
-                            _ => {
-                                return Err(Error::FunctionArgNotSymbol(format!(
-                                    "{:?} is not a symbol",
-                                    param
-                                )));
-                            }
-                        };
-                        let param_ty = self.new_unbound_tvar(level);
-                        self.vars.insert(param.to_owned(), param_ty.clone());
-                        param_tys.push(param_ty);
-                    }
-                    let mut ret_ty = None;
-                    for val in body {
-                        let body_ty = self.infer(level, val)?;
-                        ret_ty = Some(body_ty);
-                    }
-                    self.vars = old_vars;
-                    Ok(Type::Arrow(
-                        param_tys,
-                        None,
-                        Box::new(ret_ty.unwrap_or(Type::Const("void".to_owned()))),
-                    ))
+                    let ty = self.define_arrow(level, &name_args[1..], None, body)?;
+                    self.vars.insert(func_name.to_owned(), ty.clone());
+                    Ok(ty)
                 }
                 [
                     Value::Atom(atom),
@@ -311,82 +334,21 @@ impl Env {
                             ));
                         }
                     };
-                    let mut param_tys = Vec::with_capacity(name_args.len() - 1);
-                    let old_vars = self.vars.clone();
-                    for param in &name_args[1..] {
-                        let param = match param {
-                            Value::Atom(name) => name,
-                            _ => {
-                                return Err(Error::FunctionArgNotSymbol(format!(
-                                    "{:?} is not a symbol",
-                                    param
-                                )));
-                            }
-                        };
-                        let param_ty = self.new_unbound_tvar(level);
-                        self.vars.insert(param.to_owned(), param_ty.clone());
-                        param_tys.push(param_ty);
-                    }
-                    let vararg_ty = match vararg.as_ref() {
-                        Value::Atom(name) => {
-                            let vararg_ty = self.new_unbound_tvar(level);
-                            self.vars.insert(name.to_owned(), vararg_ty.clone());
-                            Box::new(vararg_ty)
-                        }
-                        _ => {
-                            return Err(Error::FunctionArgNotSymbol(format!(
-                                "{:?} is not a symbol",
-                                vararg
-                            )));
-                        }
-                    };
-                    let mut ret_ty = None;
-                    for val in body {
-                        let body_ty = self.infer(level, val)?;
-                        ret_ty = Some(body_ty);
-                    }
-                    self.vars = old_vars;
-                    Ok(Type::Arrow(
-                        param_tys,
-                        Some(vararg_ty),
-                        Box::new(ret_ty.unwrap_or(Type::Const("void".to_owned()))),
-                    ))
+                    let ty = self.define_arrow(level, &name_args[1..], Some(vararg), body)?;
+                    self.vars.insert(func_name.to_owned(), ty.clone());
+                    Ok(ty)
                 }
                 [Value::Atom(atom), Value::List(params), body @ ..] if atom == "lambda" => {
-                    let mut param_tys = Vec::with_capacity(params.len());
-                    let old_vars = self.vars.clone();
-                    for param in params {
-                        let param = match param {
-                            Value::Atom(name) => name,
-                            _ => {
-                                return Err(Error::FunctionArgNotSymbol(format!(
-                                    "{:?} is not a symbol",
-                                    param
-                                )));
-                            }
-                        };
-                        let param_ty = self.new_unbound_tvar(level);
-                        self.vars.insert(param.to_owned(), param_ty.clone());
-                        param_tys.push(param_ty);
-                    }
-                    let mut ret_ty = None;
-                    for val in body {
-                        let body_ty = self.infer(level, val)?;
-                        ret_ty = Some(body_ty);
-                    }
-                    self.vars = old_vars;
-                    // TODO: void?
-                    let ret_ty = ret_ty.unwrap_or(Type::Const("void".to_owned()));
-                    Ok(Type::Arrow(param_tys, None, Box::new(ret_ty)))
+                    self.define_arrow(level, params, None, body)
                 }
                 [
                     Value::Atom(atom),
                     Value::DottedList(params, vararg),
                     body @ ..,
-                ] if atom == "lambda" => {
-                    todo!()
+                ] if atom == "lambda" => self.define_arrow(level, params, Some(vararg), body),
+                [Value::Atom(atom), vararg @ Value::Atom(_), body @ ..] if atom == "lambda" => {
+                    self.define_arrow(level, &[], Some(vararg), body)
                 }
-                [Value::Atom(atom), Value::Atom(vararg), body @ ..] if atom == "lambda" => todo!(),
                 [Value::Atom(atom), Value::String(path)] if atom == "load" => {
                     let lines = std::fs::read_to_string(path).map_err(|e| Error::IO(e.kind()))?;
                     let vals = parse_multiple(&lines).map_err(|_| Error::Parser)?;
@@ -412,7 +374,7 @@ impl Env {
                         };
                         self.unify(&arg_ty, param)?;
                     }
-                    Ok(*ret)
+                    Ok(ret)
                 }
                 _ => Err(Error::BadSpecialForm(
                     "unrecognized special form".to_owned(),
@@ -451,10 +413,8 @@ impl Env {
                 }
                 self.generalize(level, ty)
             }
-            Type::Arrow(params, vararg, ret) => {
-                for param in params {
-                    self.generalize(level, param)?;
-                }
+            Type::Arrow(param, vararg, ret) => {
+                self.generalize(level, param)?;
                 if let Some(vararg) = vararg {
                     self.generalize(level, vararg)?;
                 }
@@ -503,22 +463,14 @@ impl Env {
                 }
                 Ok(Type::App(Box::new(instantiated_ty), instantiated_args))
             }
-            Type::Arrow(params, vararg, ret) => {
-                let instantiated_ret = self.instantiate_impl(id_vars, level, *ret)?;
-                let mut instantiated_params = Vec::with_capacity(params.len());
-                for param in params {
-                    let instantiated_param = self.instantiate_impl(id_vars, level, param)?;
-                    instantiated_params.push(instantiated_param);
-                }
-                let instantiated_vararg = match vararg {
+            Type::Arrow(param, vararg, ret) => {
+                let param = self.instantiate_impl(id_vars, level, *param)?;
+                let vararg = match vararg {
                     Some(vararg) => Some(Box::new(self.instantiate_impl(id_vars, level, *vararg)?)),
                     None => None,
                 };
-                Ok(Type::Arrow(
-                    instantiated_params,
-                    instantiated_vararg,
-                    Box::new(instantiated_ret),
-                ))
+                let ret = self.instantiate_impl(id_vars, level, *ret)?;
+                Ok(Type::Arrow(Box::new(param), vararg, Box::new(ret)))
             }
             Type::ListNil => Ok(Type::ListNil),
             Type::ListCons(head, tail) => {
@@ -533,16 +485,33 @@ impl Env {
         &mut self,
         num_params: usize,
         ty: Type,
-    ) -> Result<(Vec<Type>, Option<Box<Type>>, Box<Type>)> {
+    ) -> Result<(Vec<Type>, Option<Type>, Type)> {
         match ty {
-            Type::Arrow(params, vararg, ret) => {
-                if num_params < params.len() {
+            Type::Arrow(param, vararg, ret) => {
+                let mut params = Vec::new();
+                let mut current = *param;
+
+                loop {
+                    match current {
+                        Type::ListCons(head, tail) => {
+                            params.push(*head);
+                            current = *tail;
+                        }
+                        Type::ListNil => break,
+                        _ => {
+                            return Err(Error::ExpectedAFunction);
+                        }
+                    }
+                }
+
+                if num_params < params.len() && vararg.is_none() {
                     return Err(Error::UnexpectedNumberOfArguments {
                         expected: params.len(),
                         actual: num_params,
                     });
                 }
-                Ok((params, vararg, ret))
+
+                Ok((params, vararg.map(|vararg| *vararg), *ret))
             }
             Type::Var(id) => {
                 let tvar = self.get_tvar(id)?;
@@ -554,9 +523,20 @@ impl Env {
                             params.push(param);
                         }
                         // TODO: This can't be correct to always assume it's not a vararg
-                        let vararg = None;
-                        let ret = Box::new(self.new_unbound_tvar(level));
-                        let ty = Type::Arrow(params.clone(), vararg.clone(), ret.clone());
+                        let vararg: Option<Type> = None;
+                        let ret = self.new_unbound_tvar(level);
+                        let params_ty = params
+                            .clone()
+                            .into_iter()
+                            .rev()
+                            .fold(Type::ListNil, |acc, param| {
+                                Type::ListCons(Box::new(param), Box::new(acc))
+                            });
+                        let ty = Type::Arrow(
+                            Box::new(params_ty),
+                            vararg.clone().map(Box::new),
+                            Box::new(ret.clone()),
+                        );
                         self.link(id, ty)?;
                         Ok((params, vararg, ret))
                     }
@@ -601,11 +581,25 @@ impl Env {
                 Ok(ty_str)
             }
             Type::Arrow(params, vararg, ret) => {
-                let mut ty_str = "(λ".to_owned();
-                for (i, param) in params.iter().enumerate() {
-                    ty_str.push_str(" ");
-                    let param = self.ty_to_string_impl(namer, param)?;
-                    ty_str.push_str(&param);
+                let mut ty_str = "(lambda (".to_owned();
+                let mut i = 0;
+                let mut current = params;
+                loop {
+                    match current.as_ref() {
+                        Type::ListCons(head, tail) => {
+                            if i != 0 {
+                                ty_str.push(' ');
+                            }
+                            let head = self.ty_to_string_impl(namer, head)?;
+                            ty_str.push_str(&head);
+                            current = tail;
+                        }
+                        Type::ListNil => break,
+                        _ => {
+                            return Err(Error::ExpectedAFunction);
+                        }
+                    }
+                    i += 1;
                 }
                 if let Some(vararg) = vararg {
                     ty_str.push_str(" . ");
@@ -613,7 +607,7 @@ impl Env {
                     ty_str.push_str(&vararg);
                 }
                 let ret = self.ty_to_string_impl(namer, ret)?;
-                ty_str.push_str(" -> ");
+                ty_str.push_str(") ");
                 ty_str.push_str(&ret);
                 ty_str.push(')');
                 Ok(ty_str)
@@ -686,11 +680,16 @@ impl Env {
         }
         fn define_io_func(env: &mut Env, name: &str, func: IOFunc) {
             let ty = match func {
-                IOFunc::Apply => Type::Arrow(
-                    vec![Type::Const("func".to_owned()), Type::ListNil],
-                    None,
-                    Box::new(Type::Const("any".to_owned())),
-                ),
+                IOFunc::Apply => {
+                    // let ret = env.new_generic_tvar();
+                    // let args = env.new_generic_tvar();
+                    // Type::arrow(
+                    //     vec![Type::ListCons(Type::arrow(), Box::new(args))],
+                    //     None,
+                    //     ret,
+                    // )
+                    todo!()
+                }
                 _ => todo!(),
                 // IOFunc::MakeReadPort | IOFunc::MakeWritePort => Type::Arrow(
                 //     vec![Type::Const(STRING.to_owned())],
@@ -751,7 +750,7 @@ impl Env {
         define_primitive_func(&mut env, "eq?", PrimitiveFunc::Eqv);
         define_primitive_func(&mut env, "eqv?", PrimitiveFunc::Eqv);
         define_primitive_func(&mut env, "equal?", PrimitiveFunc::Equal);
-        define_io_func(&mut env, "apply", IOFunc::Apply);
+        // define_io_func(&mut env, "apply", IOFunc::Apply);
         // define_io_func(&mut env, "open-input-file", IOFunc::MakeReadPort);
         // define_io_func(&mut env, "open-output-file", IOFunc::MakeWritePort);
         // define_io_func(&mut env, "close-input-port", IOFunc::ClosePort);
@@ -769,77 +768,55 @@ impl Env {
             | PrimitiveFunc::Sub
             | PrimitiveFunc::Mul
             | PrimitiveFunc::Div
-            | PrimitiveFunc::Rem => Type::Arrow(
-                vec![],
-                Some(Box::new(Type::Const(INT.to_owned()))),
-                Box::new(Type::Const(INT.to_owned())),
-            ),
+            | PrimitiveFunc::Rem => Type::arrow(vec![], Some(Type::int()), Type::int()),
             PrimitiveFunc::Eq
             | PrimitiveFunc::Lt
             | PrimitiveFunc::Gt
             | PrimitiveFunc::Ne
             | PrimitiveFunc::Ge
-            | PrimitiveFunc::Le => Type::Arrow(
-                vec![],
-                Some(Box::new(Type::Const(INT.to_owned()))),
-                Box::new(Type::Const(BOOL.to_owned())),
-            ),
-            PrimitiveFunc::And | PrimitiveFunc::Or => Type::Arrow(
-                vec![],
-                Some(Box::new(Type::Const(BOOL.to_owned()))),
-                Box::new(Type::Const(BOOL.to_owned())),
-            ),
+            | PrimitiveFunc::Le => Type::arrow(vec![], Some(Type::int()), Type::bool()),
+            PrimitiveFunc::And | PrimitiveFunc::Or => {
+                Type::arrow(vec![], Some(Type::bool()), Type::bool())
+            }
             PrimitiveFunc::StringEq
             | PrimitiveFunc::StringLt
             | PrimitiveFunc::StringGt
             | PrimitiveFunc::StringLe
-            | PrimitiveFunc::StringGe => Type::Arrow(
-                vec![],
-                Some(Box::new(Type::Const(STRING.to_owned()))),
-                Box::new(Type::Const(BOOL.to_owned())),
-            ),
+            | PrimitiveFunc::StringGe => Type::arrow(vec![], Some(Type::string()), Type::bool()),
             PrimitiveFunc::Car => {
                 let head = self.new_generic_tvar();
                 let tail = self.new_generic_tvar();
-                Type::Arrow(
+                Type::arrow(
                     vec![Type::ListCons(Box::new(head.clone()), Box::new(tail))],
                     None,
-                    Box::new(head),
+                    head,
                 )
             }
             PrimitiveFunc::Cdr => {
                 let head = self.new_generic_tvar();
                 let tail = self.new_generic_tvar();
-                Type::Arrow(
+                Type::arrow(
                     vec![Type::ListCons(Box::new(head), Box::new(tail.clone()))],
                     None,
-                    Box::new(tail),
+                    tail,
                 )
             }
             PrimitiveFunc::Cons => {
                 let a = self.new_generic_tvar();
                 let b = self.new_generic_tvar();
-                Type::Arrow(
+                Type::arrow(
                     vec![a.clone(), b.clone()],
                     None,
-                    Box::new(Type::ListCons(Box::new(a), Box::new(b))),
+                    Type::ListCons(Box::new(a), Box::new(b)),
                 )
             }
             PrimitiveFunc::Eqv => {
                 let a = self.new_generic_tvar();
-                Type::Arrow(
-                    vec![a.clone(), a],
-                    None,
-                    Box::new(Type::Const(BOOL.to_owned())),
-                )
+                Type::arrow(vec![a.clone(), a], None, Type::bool())
             }
             PrimitiveFunc::Equal => {
                 let a = self.new_generic_tvar();
-                Type::Arrow(
-                    vec![a.clone(), a],
-                    None,
-                    Box::new(Type::Const(BOOL.to_owned())),
-                )
+                Type::arrow(vec![a.clone(), a], None, Type::bool())
             }
         }
     }

@@ -13,11 +13,32 @@ pub type Level = i64;
 pub enum Type {
     Const(String),
     App(Box<Type>, Vec<Type>),
-    Arrow(Vec<Type>, Option<Box<Type>>, Box<Type>), // args, vararg, ret
+    Arrow(Box<Type>, Option<Box<Type>>, Box<Type>), // params, vararg, ret
     Var(Id),
     // List
     ListNil,
     ListCons(Box<Type>, Box<Type>),
+}
+
+impl Type {
+    pub fn arrow(params: Vec<Type>, vararg: Option<Type>, ret: Type) -> Type {
+        let params = params.into_iter().rev().fold(Type::ListNil, |acc, param| {
+            Type::ListCons(Box::new(param), Box::new(acc))
+        });
+        Type::Arrow(Box::new(params), vararg.map(Box::new), Box::new(ret))
+    }
+
+    pub fn int() -> Type {
+        Type::Const("int".to_owned())
+    }
+
+    pub fn bool() -> Type {
+        Type::Const("bool".to_owned())
+    }
+
+    pub fn string() -> Type {
+        Type::Const("string".to_owned())
+    }
 }
 
 pub fn replace_ty_constants_with_vars(env: &HashMap<String, Type>, ty: Type) -> Type {
@@ -35,14 +56,11 @@ pub fn replace_ty_constants_with_vars(env: &HashMap<String, Type>, ty: Type) -> 
                 .collect();
             Type::App(ty, args)
         }
-        Type::Arrow(params, vararg, ret) => {
-            let params = params
-                .into_iter()
-                .map(|param| replace_ty_constants_with_vars(env, param))
-                .collect();
-            let vararg = vararg.map(|vararg| replace_ty_constants_with_vars(env, *vararg));
+        Type::Arrow(param, vararg, ret) => {
+            let param = Box::new(replace_ty_constants_with_vars(env, *param));
+            let vararg = vararg.map(|v| Box::new(replace_ty_constants_with_vars(env, *v)));
             let ret = Box::new(replace_ty_constants_with_vars(env, *ret));
-            Type::Arrow(params, vararg.map(Box::new), ret)
+            Type::Arrow(param, vararg, ret)
         }
         Type::ListNil => Type::ListNil,
         Type::ListCons(head, tail) => {
@@ -70,8 +88,8 @@ pub enum Token<'a> {
     LParen,
     #[token(")")]
     RParen,
-    #[token("->")]
-    Arrow,
+    #[token("lambda")]
+    Lambda,
     #[token("forall")]
     Forall,
     #[token("[")]
@@ -82,8 +100,6 @@ pub enum Token<'a> {
     Comma,
     #[token(".")]
     Dot,
-    #[token("λ")]
-    Lambda,
 }
 
 fn parser<'tokens, 'src: 'tokens, I>()
@@ -91,7 +107,7 @@ fn parser<'tokens, 'src: 'tokens, I>()
 where
     I: ValueInput<'tokens, Token = Token<'src>, Span = SimpleSpan>,
 {
-    // parse "a", "pair[a, b]", "(λ a b . c -> d)", "(a b . c)"
+    // parse "a", "pair[a, b]", "(lambda (a b . c) d)", "(a b . c)"
     recursive(|ty| {
         let atom = select! { Token::Const(name) => Type::Const(name.to_string()) }.labelled("type");
         let app = atom
@@ -104,11 +120,18 @@ where
             .map(|(ty, args)| Type::App(Box::new(ty), args))
             .labelled("type application");
         let fn_ty = just(Token::Lambda)
-            .ignore_then(ty.clone().repeated().at_least(1).collect::<Vec<_>>())
+            .ignore_then(just(Token::LParen))
+            .ignore_then(ty.clone().repeated().at_least(1).collect::<Vec<Type>>())
             .then(just(Token::Dot).ignore_then(ty.clone()).or_not())
-            .then(just(Token::Arrow).ignore_then(ty.clone()))
-            .map(|((params, vararg), ret)| Type::Arrow(params, vararg.map(Box::new), Box::new(ret)))
-            .labelled("function type");
+            .then_ignore(just(Token::RParen))
+            .then(ty.clone())
+            .map(|((params, vararg), ret)| {
+                let params = params.into_iter().rev().fold(Type::ListNil, |acc, param| {
+                    Type::ListCons(Box::new(param), Box::new(acc))
+                });
+                Type::Arrow(Box::new(params), vararg.map(Box::new), Box::new(ret))
+            })
+            .labelled("lambda type");
         // TODO: You can't have ( . ())
         let list = ty
             .clone()
@@ -191,32 +214,32 @@ mod tests {
         })
     }
 
+    fn arrow(params: Vec<Type>, vararg: Option<Type>, ret: Type) -> Type {
+        let params = params.into_iter().rev().fold(Type::ListNil, |acc, param| {
+            Type::ListCons(Box::new(param), Box::new(acc))
+        });
+        Type::Arrow(Box::new(params), vararg.map(Box::new), Box::new(ret))
+    }
+
     #[test]
     fn parse_type_tests() {
         let cases: Vec<(&str, Type)> = vec![
             (
-                "forall[a] (λ a -> a)",
-                Type::Arrow(vec![Type::Var(0)], None, Box::new(Type::Var(0))),
+                "forall[a] (lambda (a) a)",
+                arrow(vec![Type::Var(0)], None, Type::Var(0)),
             ),
             ("int", const_("int")),
             (
-                "forall[a b] (λ a b -> pair[a, b])",
-                Type::Arrow(
+                "forall[a b] (lambda (a b) pair[a, b])",
+                arrow(
                     vec![Type::Var(0), Type::Var(1)],
                     None,
-                    Box::new(Type::App(
-                        Box::new(const_("pair")),
-                        vec![Type::Var(0), Type::Var(1)],
-                    )),
+                    Type::App(Box::new(const_("pair")), vec![Type::Var(0), Type::Var(1)]),
                 ),
             ),
             (
-                "forall[a b] (λ a b -> b)",
-                Type::Arrow(
-                    vec![Type::Var(0), Type::Var(1)],
-                    None,
-                    Box::new(Type::Var(1)),
-                ),
+                "forall[a b] (lambda (a b) b)",
+                arrow(vec![Type::Var(0), Type::Var(1)], None, Type::Var(1)),
             ),
             ("bool", const_("bool")),
             (
@@ -229,14 +252,10 @@ mod tests {
             // ("forall[a] (a, a) -> bool"),
             // ("forall[a] list[a -> a]"),
             (
-                "list[(λ int -> int)]",
+                "list[(lambda (int) int)]",
                 Type::App(
                     Box::new(const_("list")),
-                    vec![Type::Arrow(
-                        vec![const_("int")],
-                        None,
-                        Box::new(const_("int")),
-                    )],
+                    vec![arrow(vec![const_("int")], None, const_("int"))],
                 ),
             ),
             ("()", Type::ListNil),
