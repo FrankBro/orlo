@@ -360,17 +360,23 @@ impl Env {
                 [func, args @ ..] => {
                     let f_ty = self.infer(level, func)?;
                     let (params, vararg, ret) = self.match_fun_ty(args.len(), f_ty)?;
+                    dbg!(&params);
+                    dbg!(&vararg);
+                    dbg!(&ret);
                     let mut current = &params;
                     for i in 0..args.len() {
                         let arg = &args[i];
                         let arg_ty = self.infer(level, arg)?;
+                        dbg!(&arg_ty);
                         match current {
                             Type::ListCons(head, tail) => {
+                                dbg!(&head);
                                 self.unify(&arg_ty, head)?;
                                 current = tail;
                             }
                             Type::ListNil => match vararg.as_ref() {
                                 Some(vararg) => {
+                                    dbg!(&vararg);
                                     self.unify(&arg_ty, vararg)?;
                                 }
                                 None => {
@@ -649,19 +655,13 @@ impl Env {
         fn define_io_func(env: &mut Env, name: &str, func: IOFunc) {
             let ty = match func {
                 IOFunc::Apply => {
-                    // let params = env.new_generic_tvar();
-                    // let vararg = env.new_generic_tvar();
-                    // let ret = env.new_generic_tvar();
-
-                    // let f = Type::arrow(vec![params.clone()], Some(vararg.clone()), ret.clone());
-
-                    // let args =
-                    // Type::arrow(
-                    //     vec![Type::ListCons(Type::arrow(), Box::new(args))],
-                    //     None,
-                    //     ret,
-                    // )
-                    todo!()
+                    let params = env.new_generic_tvar();
+                    let ret = env.new_generic_tvar();
+                    Type::arrow(
+                        vec![Type::arrow(vec![params.clone()], None, ret.clone()), params],
+                        None,
+                        ret,
+                    )
                 }
                 _ => todo!(),
                 // IOFunc::MakeReadPort | IOFunc::MakeWritePort => Type::Arrow(
@@ -723,7 +723,7 @@ impl Env {
         define_primitive_func(&mut env, "eq?", PrimitiveFunc::Eqv);
         define_primitive_func(&mut env, "eqv?", PrimitiveFunc::Eqv);
         define_primitive_func(&mut env, "equal?", PrimitiveFunc::Equal);
-        // define_io_func(&mut env, "apply", IOFunc::Apply);
+        define_io_func(&mut env, "apply", IOFunc::Apply);
         // define_io_func(&mut env, "open-input-file", IOFunc::MakeReadPort);
         // define_io_func(&mut env, "open-output-file", IOFunc::MakeWritePort);
         // define_io_func(&mut env, "close-input-port", IOFunc::ClosePort);
