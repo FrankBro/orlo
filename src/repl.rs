@@ -1,10 +1,15 @@
 use std::io::{self, BufRead, Write};
 
-use crate::{env::Env, eval::eval, infer, parser::parse};
+use crate::{env::Env, eval::eval, infer, parser::parse, value::Value};
 
 fn print(line: &str) {
     print!("{}", line);
     io::stdout().flush().unwrap();
+}
+
+fn get_type(env: &mut infer::Env, value: &Value) -> Result<String, infer::Error> {
+    let ty = env.infer_value(value)?;
+    env.ty_to_string(&ty)
 }
 
 pub fn run() {
@@ -20,8 +25,13 @@ pub fn run() {
         }
         match parse(input) {
             Ok(value) => {
-                let ty = type_env.infer_value(&value).unwrap();
-                let ty = type_env.ty_to_string(&ty).unwrap();
+                let ty = match get_type(&mut type_env, &value) {
+                    Ok(ty) => ty,
+                    Err(e) => {
+                        println!("Type error: {:?}", e);
+                        String::from("type error")
+                    }
+                };
                 match eval(&mut env, &value) {
                     Ok(value) => println!("{} :: {}", value, ty),
                     Err(e) => println!("Eval error: {}", e),
