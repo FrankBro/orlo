@@ -106,16 +106,16 @@ impl Env {
                 }
                 self.occurs_check_adjust_levels(tvar_id, tvar_level, ty)
             }
-            Type::Arrow(param, ret) => {
+            Type::Arrow(param, vararg, ret) => {
                 self.occurs_check_adjust_levels(tvar_id, tvar_level, param)?;
+                if let Some(vararg) = vararg {
+                    self.occurs_check_adjust_levels(tvar_id, tvar_level, vararg)?;
+                }
                 self.occurs_check_adjust_levels(tvar_id, tvar_level, ret)
             }
             Type::ListCons(head, tail) => {
                 self.occurs_check_adjust_levels(tvar_id, tvar_level, head)?;
                 self.occurs_check_adjust_levels(tvar_id, tvar_level, tail)
-            }
-            Type::ListVarArg(vararg) => {
-                self.occurs_check_adjust_levels(tvar_id, tvar_level, vararg)
             }
             Type::Const(_) | Type::ListNil => Ok(()),
         }
@@ -129,7 +129,6 @@ impl Env {
                 self.unify(head1, head2)?;
                 self.unify_list(tail1, tail2)
             }
-            (Type::ListVarArg(vararg1), Type::ListVarArg(vararg2)) => self.unify(vararg1, vararg2),
             // TODO: Do we need special handling here ala row polymorphism?
             (Type::Var(_), _) | (_, Type::Var(_)) => self.unify(ty1, ty2),
             _ => Err(Error::CannotUnifyList(ty1.clone(), ty2.clone())),
@@ -153,13 +152,17 @@ impl Env {
                 }
                 self.unify(app_ty1, app_ty2)
             }
-            (Type::Arrow(param1, ret1), Type::Arrow(param2, ret2)) => {
+            (Type::Arrow(param1, vararg1, ret1), Type::Arrow(param2, vararg2, ret2)) => {
                 self.unify(param1, param2)?;
+                match (vararg1, vararg2) {
+                    (Some(vararg1), Some(vararg2)) => self.unify(vararg1, vararg2)?,
+                    (None, None) => {}
+                    _ => return Err(Error::CannotUnify(ty1.clone(), ty2.clone())),
+                }
                 self.unify(ret1, ret2)
             }
             (Type::ListNil, Type::ListNil) => Ok(()),
             (Type::ListCons(_, _), Type::ListCons(_, _)) => self.unify_list(ty1, ty2),
-            (Type::ListVarArg(vararg1), Type::ListVarArg(vararg2)) => self.unify(vararg1, vararg2),
             (Type::ListCons(_, _), Type::ListNil) | (Type::ListNil, Type::ListCons(_, _)) => {
                 Err(Error::CannotUnifyList(ty1.clone(), ty2.clone()))
             }
@@ -236,15 +239,14 @@ impl Env {
             ret_ty = body_ty;
         }
         self.vars = old_vars;
-        let init = if vararg_ty.is_some() {
-            Type::ListVarArg(Box::new(vararg_ty.as_ref().unwrap().clone()))
-        } else {
-            Type::ListNil
-        };
-        let params = param_tys.into_iter().rev().fold(init, |acc, param| {
-            Type::ListCons(Box::new(param), Box::new(acc))
-        });
-        Ok(Type::Arrow(Box::new(params), Box::new(ret_ty)))
+        let params = param_tys
+            .into_iter()
+            .rev()
+            .fold(Type::ListNil, |acc, param| {
+                Type::ListCons(Box::new(param), Box::new(acc))
+            });
+        let vararg = vararg_ty.map(Box::new);
+        Ok(Type::Arrow(Box::new(params), vararg, Box::new(ret_ty)))
     }
 
     fn infer(&mut self, level: Level, val: &Value) -> Result<Type> {
@@ -357,7 +359,7 @@ impl Env {
                 }
                 [func, args @ ..] => {
                     let f_ty = self.infer(level, func)?;
-                    let (params, ret) = self.match_fun_ty(args.len(), f_ty)?;
+                    let (params, vararg, ret) = self.match_fun_ty(args.len(), f_ty)?;
                     let mut current = &params;
                     for i in 0..args.len() {
                         let arg = &args[i];
@@ -367,15 +369,17 @@ impl Env {
                                 self.unify(&arg_ty, head)?;
                                 current = tail;
                             }
-                            Type::ListVarArg(vararg) => {
-                                self.unify(&arg_ty, vararg)?;
-                            }
-                            Type::ListNil => {
-                                return Err(Error::UnexpectedNumberOfArguments {
-                                    expected: i,
-                                    actual: args.len(),
-                                });
-                            }
+                            Type::ListNil => match vararg.as_ref() {
+                                Some(vararg) => {
+                                    self.unify(&arg_ty, vararg)?;
+                                }
+                                None => {
+                                    return Err(Error::UnexpectedNumberOfArguments {
+                                        expected: i,
+                                        actual: args.len(),
+                                    });
+                                }
+                            },
                             _ => unreachable!("match_fun_ty should've taken care of this"),
                         }
                     }
@@ -418,15 +422,17 @@ impl Env {
                 }
                 self.generalize(level, ty)
             }
-            Type::Arrow(param, ret) => {
+            Type::Arrow(param, vararg, ret) => {
                 self.generalize(level, param)?;
+                if let Some(vararg) = vararg {
+                    self.generalize(level, vararg)?;
+                }
                 self.generalize(level, ret)
             }
             Type::ListCons(head, tail) => {
                 self.generalize(level, head)?;
                 self.generalize(level, tail)
             }
-            Type::ListVarArg(vararg) => self.generalize(level, vararg),
             Type::Const(_) | Type::ListNil => Ok(()),
         }
     }
@@ -466,10 +472,14 @@ impl Env {
                 }
                 Ok(Type::App(Box::new(instantiated_ty), instantiated_args))
             }
-            Type::Arrow(param, ret) => {
+            Type::Arrow(param, vararg, ret) => {
                 let param = self.instantiate_impl(id_vars, level, *param)?;
+                let vararg = match vararg {
+                    Some(vararg) => Some(Box::new(self.instantiate_impl(id_vars, level, *vararg)?)),
+                    None => None,
+                };
                 let ret = self.instantiate_impl(id_vars, level, *ret)?;
-                Ok(Type::Arrow(Box::new(param), Box::new(ret)))
+                Ok(Type::Arrow(Box::new(param), vararg, Box::new(ret)))
             }
             Type::ListNil => Ok(Type::ListNil),
             Type::ListCons(head, tail) => {
@@ -477,16 +487,12 @@ impl Env {
                 let tail = self.instantiate_impl(id_vars, level, *tail)?;
                 Ok(Type::ListCons(Box::new(head), Box::new(tail)))
             }
-            Type::ListVarArg(vararg) => {
-                let vararg = self.instantiate_impl(id_vars, level, *vararg)?;
-                Ok(Type::ListVarArg(Box::new(vararg)))
-            }
         }
     }
 
-    fn match_fun_ty(&mut self, num_params: usize, ty: Type) -> Result<(Type, Type)> {
+    fn match_fun_ty(&mut self, num_params: usize, ty: Type) -> Result<(Type, Option<Type>, Type)> {
         match ty {
-            Type::Arrow(params, ret) => Ok((*params, *ret)),
+            Type::Arrow(params, vararg, ret) => Ok((*params, vararg.map(|vararg| *vararg), *ret)),
             Type::Var(id) => {
                 let tvar = self.get_tvar(id)?;
                 match tvar.clone() {
@@ -498,9 +504,9 @@ impl Env {
                                 Type::ListCons(Box::new(param), Box::new(acc))
                             });
                         let ret = self.new_unbound_tvar(level);
-                        let ty = Type::Arrow(Box::new(params.clone()), Box::new(ret.clone()));
+                        let ty = Type::Arrow(Box::new(params.clone()), None, Box::new(ret.clone()));
                         self.link(id, ty)?;
-                        Ok((params, ret))
+                        Ok((params, None, ret))
                     }
                     TypeVar::Link(ty) => self.match_fun_ty(num_params, ty),
                     TypeVar::Generic => Err(Error::ExpectedAFunction),
@@ -542,7 +548,7 @@ impl Env {
                 ty_str.push(']');
                 Ok(ty_str)
             }
-            Type::Arrow(params, ret) => {
+            Type::Arrow(params, vararg, ret) => {
                 let mut ty_str = "(lambda (".to_owned();
                 let mut i = 0;
                 let mut current = params;
@@ -556,18 +562,17 @@ impl Env {
                             ty_str.push_str(&head);
                             current = tail;
                         }
-                        Type::ListVarArg(vararg) => {
-                            ty_str.push_str(" . ");
-                            let vararg = self.ty_to_string_impl(namer, vararg)?;
-                            ty_str.push_str(&vararg);
-                            break;
-                        }
                         Type::ListNil => break,
                         _ => {
                             return Err(Error::ExpectedAFunction);
                         }
                     }
                     i += 1;
+                }
+                if let Some(vararg) = vararg {
+                    let vararg = self.ty_to_string_impl(namer, vararg)?;
+                    ty_str.push_str(" . ");
+                    ty_str.push_str(&vararg);
                 }
                 let ret = self.ty_to_string_impl(namer, ret)?;
                 ty_str.push_str(") ");
@@ -586,7 +591,6 @@ impl Env {
                     TypeVar::Link(ty) => self.ty_to_string_impl(namer, ty),
                 }
             }
-            Type::ListVarArg(_) => unreachable!(),
             Type::ListNil => Ok("()".to_owned()),
             Type::ListCons(head, tail) => {
                 let mut ty_str = "(".to_owned();
