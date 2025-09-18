@@ -665,24 +665,6 @@ impl Env {
                         )),
                         Box::new(ret),
                     )
-                    // let head_param = env.new_generic_tvar();
-                    // let tail_param = env.new_generic_tvar();
-                    // let ret = env.new_generic_tvar();
-                    // Type::arrow(
-                    //     vec![
-                    //         Type::arrow(
-                    //             vec![Type::ListCons(
-                    //                 Box::new(head_param.clone()),
-                    //                 Box::new(tail_param.clone()),
-                    //             )],
-                    //             None,
-                    //             ret.clone(),
-                    //         ),
-                    //         Type::ListCons(Box::new(head_param), Box::new(tail_param)),
-                    //     ],
-                    //     None,
-                    //     ret,
-                    // )
                 }
                 _ => todo!(),
                 // IOFunc::MakeReadPort | IOFunc::MakeWritePort => Type::Arrow(
