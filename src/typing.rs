@@ -13,20 +13,25 @@ pub type Level = i64;
 pub enum Type {
     Const(String),
     App(Box<Type>, Vec<Type>),
-    Arrow(Box<Type>, Option<Box<Type>>, Box<Type>), // params (list) + vararg + ret
+    Arrow(Box<Type>, Box<Type>), // params (list) + vararg + ret
     Var(Id),
     // List
     ListNil,
+    ListVarArg(Box<Type>),
     ListCons(Box<Type>, Box<Type>),
 }
 
 impl Type {
     pub fn arrow(params: Vec<Type>, vararg: Option<Type>, ret: Type) -> Type {
-        let vararg = vararg.map(Box::new);
-        let params = params.into_iter().rev().fold(Type::ListNil, |acc, param| {
+        let init = if let Some(vararg) = vararg {
+            Type::ListVarArg(Box::new(vararg))
+        } else {
+            Type::ListNil
+        };
+        let params = params.into_iter().rev().fold(init, |acc, param| {
             Type::ListCons(Box::new(param), Box::new(acc))
         });
-        Type::Arrow(Box::new(params), vararg, Box::new(ret))
+        Type::Arrow(Box::new(params), Box::new(ret))
     }
 
     pub fn int() -> Type {
@@ -57,14 +62,16 @@ pub fn replace_ty_constants_with_vars(env: &HashMap<String, Type>, ty: Type) -> 
                 .collect();
             Type::App(ty, args)
         }
-        Type::Arrow(param, vararg, ret) => {
+        Type::Arrow(param, ret) => {
             let param = Box::new(replace_ty_constants_with_vars(env, *param));
-            let vararg =
-                vararg.map(|vararg| Box::new(replace_ty_constants_with_vars(env, *vararg)));
             let ret = Box::new(replace_ty_constants_with_vars(env, *ret));
-            Type::Arrow(param, vararg, ret)
+            Type::Arrow(param, ret)
         }
         Type::ListNil => Type::ListNil,
+        Type::ListVarArg(vararg) => {
+            let vararg = Box::new(replace_ty_constants_with_vars(env, *vararg));
+            Type::ListVarArg(vararg)
+        }
         Type::ListCons(head, tail) => {
             let head = Box::new(replace_ty_constants_with_vars(env, *head));
             let tail = Box::new(replace_ty_constants_with_vars(env, *tail));
@@ -128,11 +135,15 @@ where
             .then_ignore(just(Token::RParen))
             .then(ty.clone())
             .map(|((params, vararg), ret)| {
-                let vararg = vararg.map(Box::new);
-                let params = params.into_iter().rev().fold(Type::ListNil, |acc, param| {
+                let init = if let Some(vararg) = vararg {
+                    Type::ListVarArg(Box::new(vararg))
+                } else {
+                    Type::ListNil
+                };
+                let params = params.into_iter().rev().fold(init, |acc, param| {
                     Type::ListCons(Box::new(param), Box::new(acc))
                 });
-                Type::Arrow(Box::new(params), vararg, Box::new(ret))
+                Type::Arrow(Box::new(params), Box::new(ret))
             })
             .labelled("lambda type");
         // TODO: You can't have ( . ())
@@ -218,11 +229,15 @@ mod tests {
     }
 
     fn arrow(params: Vec<Type>, vararg: Option<Type>, ret: Type) -> Type {
-        let vararg = vararg.map(Box::new);
-        let params = params.into_iter().rev().fold(Type::ListNil, |acc, param| {
+        let init = if let Some(vararg) = vararg {
+            Type::ListVarArg(Box::new(vararg))
+        } else {
+            Type::ListNil
+        };
+        let params = params.into_iter().rev().fold(init, |acc, param| {
             Type::ListCons(Box::new(param), Box::new(acc))
         });
-        Type::Arrow(Box::new(params), vararg, Box::new(ret))
+        Type::Arrow(Box::new(params), Box::new(ret))
     }
 
     #[test]
