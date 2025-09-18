@@ -29,11 +29,11 @@ pub fn run() {
                     Ok(ty) => ty,
                     Err(e) => {
                         println!("Type error: {:?}", e);
-                        String::from("type error")
+                        String::from("error")
                     }
                 };
                 match eval(&mut env, &value) {
-                    Ok(value) => println!("{} :: {}", value, ty),
+                    Ok(value) => println!("(the {} {})", ty, value),
                     Err(e) => println!("Eval error: {}", e),
                 }
             }
