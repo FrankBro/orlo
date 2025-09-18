@@ -655,10 +655,15 @@ impl Env {
                 IOFunc::Apply => {
                     let params = env.new_generic_tvar();
                     let ret = env.new_generic_tvar();
-                    Type::arrow(
-                        vec![Type::arrow(vec![params.clone()], None, ret.clone()), params],
-                        None,
-                        ret,
+
+                    let func_type = Type::Arrow(Box::new(params.clone()), Box::new(ret.clone()));
+
+                    Type::Arrow(
+                        Box::new(Type::ListCons(
+                            Box::new(func_type),
+                            Box::new(Type::ListCons(Box::new(params), Box::new(Type::ListNil))),
+                        )),
+                        Box::new(ret),
                     )
                     // let head_param = env.new_generic_tvar();
                     // let tail_param = env.new_generic_tvar();
@@ -860,29 +865,42 @@ mod tests {
         Expected::Fail(e)
     }
 
-    fn run(input: &str, expected: &str, mut env: Env) {
-        let (vars, ty) = crate::typing::parse(expected).unwrap();
-        let expected = env.replace_ty_constants_with_vars(vars, ty);
+    fn run(input: &str, expected: &str, env: &mut Env) {
         let value = parse(input).unwrap();
         let actual = env
             .infer_value(&value)
             .expect(&format!("input: {}, value: {:?}", input, value));
         env.generalize(-1, &actual).unwrap();
-        let expected = env.ty_to_string(&expected).unwrap();
-        let actual = env.ty_to_string(&actual).unwrap();
-        assert_eq!(actual, expected, "input: {}, value: {}", input, value);
+        if !expected.is_empty() {
+            let (vars, ty) = crate::typing::parse(expected).unwrap();
+            let expected = env.replace_ty_constants_with_vars(vars, ty);
+            let expected = env.ty_to_string(&expected).unwrap();
+            let actual = env.ty_to_string(&actual).unwrap();
+            assert_eq!(actual, expected, "input: {}, value: {}", input, value);
+        }
     }
 
     #[test]
     fn cdr_test() {
-        let env = Env::primitive_bindings();
-        run("(cdr '(1 2 3))", "(int int)", env);
+        let mut env = Env::primitive_bindings();
+        run("(cdr '(1 2 3))", "(int int)", &mut env);
     }
 
     #[test]
     fn apply_test() {
-        let env = Env::primitive_bindings();
-        run("(apply + '(1 2 3))", "int", env);
+        let mut env = Env::primitive_bindings();
+        run("(apply + '(1 2 3))", "int", &mut env);
+        run("(apply + '(1 2))", "int", &mut env);
+        run("(apply + '(1))", "int", &mut env);
+        run("(define (add a b) (+ a b))", "", &mut env);
+        run("(apply add '(1 2))", "int", &mut env);
+        run("(define (seq a b) (string=? a b))", "", &mut env);
+        run("(apply seq '(\"a\" \"a\"))", "bool", &mut env);
+        run("(define (test a b) b)", "", &mut env);
+        run("(test 1 \"a\")", "string", &mut env);
+        run("(test \"a\" 1)", "int", &mut env);
+        run("(apply test '(1 \"a\"))", "string", &mut env);
+        run("(apply test '(\"a\" 1))", "int", &mut env);
     }
 
     #[test]
@@ -963,10 +981,9 @@ mod tests {
             // ("(map (curry + 2) '(1 2 3 4))", Ok("(3 4 5 6)")),
             // ("(filter even? '(1 2 3 4))", Ok("(2 4)")),
         ];
-        let env = Env::primitive_bindings();
+        let mut env = Env::primitive_bindings();
         for (input, expected) in cases {
-            let env = env.clone();
-            run(input, expected, env);
+            run(input, expected, &mut env);
         }
     }
 }
