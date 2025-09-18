@@ -174,12 +174,7 @@ impl Env {
             }
             (Type::ListCons(head, tail), Type::ListVarArg(vararg))
             | (Type::ListVarArg(vararg), Type::ListCons(head, tail)) => {
-                println!(
-                    "unifying list cons with vararg: {:?} and {:?}",
-                    head, vararg
-                );
                 self.unify(head, vararg)?;
-                println!("unifying tail with vararg: {:?} and {:?}", tail, vararg);
                 if tail.as_ref() == &Type::ListNil {
                     return Ok(());
                 }
