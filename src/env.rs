@@ -22,8 +22,7 @@ enum Port {
     WritePort(BufWriter<File>),
 }
 
-// TODO: Will grow forever, thought about saving vals.len() and then use vec.truncate
-// but I think we'd lose some captured variables that don't live long enough?
+// TODO: Garbage collection? Linear programming?
 #[derive(Default, Debug)]
 pub struct Env {
     vals: Vec<Value>,

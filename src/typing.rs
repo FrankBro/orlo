@@ -193,6 +193,7 @@ where
         .labelled("forall type")
 }
 
+#[allow(dead_code)]
 pub fn parse<'a>(input: &'a str) -> Result<(Vec<String>, Type), Vec<Rich<'a, Token<'a>>>> {
     let token_iter = Token::lexer(input).spanned().map(|(tok, span)| match tok {
         Ok(tok) => (tok, span.into()),

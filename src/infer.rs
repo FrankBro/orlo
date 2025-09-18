@@ -20,9 +20,7 @@ pub enum Error {
     ExpectedAFunction,
     RecursiveType,
     CannotUnify(Type, Type),
-    CannotUnifyList(Type, Type),
     FunctionArgNotSymbol(String),
-    TopLevelVarArg,
     IO(std::io::ErrorKind),
     Parser,
     DefineFunctionNotSymbol(Value),
@@ -389,14 +387,14 @@ impl Env {
                     val.clone(),
                 )),
             },
-            Value::DottedList(values, value) => todo!(),
+            Value::DottedList(_values, _value) => todo!(),
             Value::Func {
-                params,
-                vararg,
-                body,
-                closure,
+                params: _,
+                vararg: _,
+                body: _,
+                closure: _,
             } => todo!(),
-            Value::IOFunc(iofunc) => todo!(),
+            Value::IOFunc(_iofunc) => todo!(),
             Value::Port(_) => todo!(),
         }
     }
@@ -513,6 +511,7 @@ impl Env {
         }
     }
 
+    #[allow(dead_code)]
     pub fn replace_ty_constants_with_vars(&mut self, vars: Vec<String>, ty: Type) -> Type {
         if vars.is_empty() {
             return ty;
@@ -826,26 +825,7 @@ impl Namer {
 
 #[cfg(test)]
 mod tests {
-    use crate::{
-        infer::{BOOL, Env, INT, STRING},
-        parser::parse,
-        typing::Type,
-    };
-
-    use super::Error;
-
-    enum Expected {
-        Pass(String),
-        Fail(Error),
-    }
-
-    fn pass(sig: &str) -> Expected {
-        Expected::Pass(sig.to_owned())
-    }
-
-    fn fail(e: Error) -> Expected {
-        Expected::Fail(e)
-    }
+    use crate::{infer::Env, parser::parse};
 
     fn run(input: &str, expected: &str, env: &mut Env) {
         let value = parse(input).unwrap();
