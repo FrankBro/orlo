@@ -367,9 +367,8 @@ impl Env {
                                 self.unify(&arg_ty, head)?;
                                 current = tail;
                             }
-                            Type::ListVarArg(_) => {
-                                // TODO: Should this be inner vararg or just current here?
-                                self.unify(&arg_ty, current)?;
+                            Type::ListVarArg(vararg) => {
+                                self.unify(&arg_ty, vararg)?;
                             }
                             Type::ListNil => {
                                 return Err(Error::UnexpectedNumberOfArguments {
@@ -863,6 +862,16 @@ mod tests {
         run("(test \"a\" 1)", "int", &mut env);
         run("(apply test '(1 \"a\"))", "string", &mut env);
         run("(apply test '(\"a\" 1))", "int", &mut env);
+    }
+
+    #[test]
+    fn vararg_test() {
+        let mut env = Env::primitive_bindings();
+        run(
+            "(define (add a b) (+ a b))",
+            "(lambda (int int) int)",
+            &mut env,
+        );
     }
 
     #[test]
