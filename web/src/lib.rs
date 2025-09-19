@@ -1,10 +1,30 @@
-use orlo::{env::Env, eval::eval, infer, parser::parse, value::Value};
+use std::sync::{Mutex, OnceLock};
+
+use orlo::{env, eval::eval, infer, parser::parse, value::Value};
 use wasm_bindgen::prelude::*;
 
-fn get_type(env: &mut infer::Env, value: &Value) -> Result<String, infer::Error> {
-    let ty = env.infer_value(value)?;
-    env.ty_to_string(&ty)
+struct Repl {
+    infer: infer::Env,
+    eval: env::Env,
 }
+
+impl Default for Repl {
+    fn default() -> Self {
+        Self {
+            infer: infer::Env::primitive_bindings(),
+            eval: env::Env::primitive_bindings(),
+        }
+    }
+}
+
+impl Repl {
+    fn get_type(&mut self, value: &Value) -> Result<String, infer::Error> {
+        let ty = self.infer.infer_value(value)?;
+        self.infer.ty_to_string(&ty)
+    }
+}
+
+static REPL: OnceLock<Mutex<Repl>> = OnceLock::new();
 
 // pub fn run() {
 //     let mut env = Env::primitive_bindings();
@@ -39,5 +59,22 @@ fn get_type(env: &mut infer::Env, value: &Value) -> Result<String, infer::Error>
 
 #[wasm_bindgen]
 pub fn repl(input: &str) -> String {
-    format!("Received {input}")
+    let repl = REPL.get_or_init(|| Mutex::new(Repl::default()));
+    let mut repl = repl.lock().unwrap();
+    let input = input.trim();
+    match parse(input) {
+        Ok(value) => {
+            let ty = match repl.get_type(&value) {
+                Ok(ty) => ty,
+                Err(e) => {
+                    return format!("Type error: {:?} for {}", e, input);
+                }
+            };
+            match eval(&mut repl.eval, &value) {
+                Ok(value) => return format!("(the {} {})", ty, value),
+                Err(e) => return format!("Eval error: {}", e),
+            }
+        }
+        Err(e) => return format!("Parse error: {:?}", e),
+    }
 }
