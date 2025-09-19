@@ -10,13 +10,17 @@
     </head>
     <body>
         <div id="terminal"></div>
-        <script>
+        <script type="module">
+            import { Repl } from "./repl.js";
             $(function () {
+                const repl = new Repl();
+
                 $("#terminal").terminal(
-                    {
-                        echo: function (arg) {
-                            this.echo(arg);
-                        },
+                    async (command, term) => {
+                        const result = await repl.eval(command);
+                        if (result) {
+                            term.echo(result);
+                        }
                     },
                     {
                         greetings: "Orlo Terminal",
