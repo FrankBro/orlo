@@ -1,4 +1,4 @@
-import init, { repl } from "../pkg/web.js";
+import init, { repl } from "./pkg/web.js";
 
 export class Repl {
   constructor() {
