@@ -115,6 +115,7 @@ impl Env {
             Type::ListVarArg(vararg) => {
                 self.occurs_check_adjust_levels(tvar_id, tvar_level, vararg)
             }
+            Type::Array(ty) => self.occurs_check_adjust_levels(tvar_id, tvar_level, ty),
             Type::Const(_) | Type::ListNil => Ok(()),
         }
     }
@@ -125,6 +126,7 @@ impl Env {
         }
         match (ty1, ty2) {
             (Type::Const(name1), Type::Const(name2)) if name1 == name2 => Ok(()),
+            (Type::Array(ty1), Type::Array(ty2)) => self.unify(ty1, ty2),
             (Type::App(app_ty1, args1), Type::App(app_ty2, args2)) => {
                 if args1.len() != args2.len() {
                     return Err(Error::CannotUnify(ty1.clone(), ty2.clone()));
@@ -242,6 +244,23 @@ impl Env {
         Ok(Type::Arrow(Box::new(params), Box::new(ret_ty)))
     }
 
+    fn infer_array(&mut self, level: Level, vals: &Vec<Value>) -> Result<Type> {
+        let mut ty = None;
+        for val in vals {
+            let val_ty = self.infer(level, val)?;
+            match ty {
+                Some(ref existing_ty) => {
+                    self.unify(existing_ty, &val_ty)?;
+                }
+                None => {
+                    ty = Some(val_ty);
+                }
+            }
+        }
+        let ty = ty.unwrap_or_else(|| self.new_unbound_tvar(level));
+        Ok(Type::Array(Box::new(ty)))
+    }
+
     fn infer(&mut self, level: Level, val: &Value) -> Result<Type> {
         match val {
             Value::Atom(name) => {
@@ -252,6 +271,7 @@ impl Env {
             Value::String(_) => Ok(Type::Const(STRING.to_owned())),
             Value::Bool(_) => Ok(Type::Const(BOOL.to_owned())),
             Value::PrimitiveFunc(_) => unreachable!("will never reach"),
+            Value::Array(vals) => self.infer_array(level, vals),
             Value::List(vals) => match &vals[..] {
                 [Value::Atom(atom), val] if atom == QUOTE => match val {
                     Value::Atom(_) => Ok(Type::Const(SYMBOL.to_owned())),
@@ -271,6 +291,7 @@ impl Env {
                         }
                         Ok(ty)
                     }
+                    Value::Array(vals) => self.infer_array(level, vals),
                     Value::Number(_) => Ok(Type::Const("number".to_owned())),
                     Value::String(_) => Ok(Type::Const("string".to_owned())),
                     Value::Bool(_) => Ok(Type::Const("bool".to_owned())),
@@ -422,6 +443,7 @@ impl Env {
                 self.generalize(level, tail)
             }
             Type::ListVarArg(vararg) => self.generalize(level, vararg),
+            Type::Array(ty) => self.generalize(level, ty),
             Type::Const(_) | Type::ListNil => Ok(()),
         }
     }
@@ -475,6 +497,10 @@ impl Env {
                 let head = self.instantiate_impl(id_vars, level, *head)?;
                 let tail = self.instantiate_impl(id_vars, level, *tail)?;
                 Ok(Type::ListCons(Box::new(head), Box::new(tail)))
+            }
+            Type::Array(ty) => {
+                let ty = self.instantiate_impl(id_vars, level, *ty)?;
+                Ok(Type::Array(Box::new(ty)))
             }
         }
     }
@@ -583,6 +609,10 @@ impl Env {
                     TypeVar::Unbound(_) => Ok(format!("_{}", id)),
                     TypeVar::Link(ty) => self.ty_to_string_impl(namer, ty),
                 }
+            }
+            Type::Array(ty) => {
+                let ty = self.ty_to_string_impl(namer, ty)?;
+                Ok(format!("[{}]", ty))
             }
             Type::ListNil => Ok("()".to_owned()),
             Type::ListVarArg(ty) => {
@@ -779,6 +809,14 @@ impl Env {
                     Type::ListCons(Box::new(a), Box::new(b)),
                 )
             }
+            PrimitiveFunc::Push => {
+                let a = self.new_generic_tvar();
+                Type::arrow(
+                    vec![Type::Array(Box::new(a.clone())), a.clone()],
+                    None,
+                    Type::Array(Box::new(a)),
+                )
+            }
             PrimitiveFunc::Eqv => {
                 let a = self.new_generic_tvar();
                 Type::arrow(vec![a.clone(), a], None, Type::bool())
@@ -891,6 +929,7 @@ mod tests {
             ("'(\"a\" 1 #t)", "(string int bool)"),
             ("(car '(\"a\" 1 #t))", "string"),
             ("(cdr '(\"a\" 1 #t))", "(int bool)"),
+            ("[]", "[a]"),
             // ("(if (= 3 3) (+ 2 3 (- 5 1)) \"unequal\")", Ok("9")),
             // ("(cdr '(a simple test))", Ok("(simple test)")),
             // ("(car (cdr '(a simple test)))", Ok("simple")),

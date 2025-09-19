@@ -33,6 +33,7 @@ pub fn apply(env: &mut Env, val: &Value, args: &[Value]) -> Result<Value> {
             PrimitiveFunc::Cons => primitive::cons(args),
             PrimitiveFunc::Eqv => primitive::eqv(args),
             PrimitiveFunc::Equal => primitive::equal(args),
+            PrimitiveFunc::Push => primitive::push_(args),
         },
         Value::IOFunc(func) => match func {
             IOFunc::Apply => primitive::apply_proc(env, args),
@@ -80,6 +81,7 @@ pub fn eval(env: &mut Env, val: &Value) -> Result<Value> {
         Value::Number(_) => Ok(val.clone()),
         Value::Bool(_) => Ok(val.clone()),
         Value::Atom(id) => env.get_var(id).cloned(),
+        Value::Array(_) => Ok(val.clone()),
         Value::List(vals) => match &vals[..] {
             [Value::Atom(atom), val] if atom == QUOTE => Ok(val.clone()),
             [Value::Atom(atom), pred, conseq, alt] if atom == "if" => {
@@ -209,7 +211,16 @@ pub fn eval(env: &mut Env, val: &Value) -> Result<Value> {
                 val.clone(),
             )),
         },
-        _ => todo!(),
+        Value::DottedList(_, _) => todo!(),
+        Value::PrimitiveFunc(_) => todo!(),
+        Value::Func {
+            params: _params,
+            vararg: _vararg,
+            body: _body,
+            closure: _closure,
+        } => todo!(),
+        Value::IOFunc(_iofunc) => todo!(),
+        Value::Port(_) => todo!(),
     }
 }
 

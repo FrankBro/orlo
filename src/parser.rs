@@ -32,6 +32,10 @@ pub enum Token<'a> {
     True,
     #[token("#f")]
     False,
+    #[token("[")]
+    LBracket,
+    #[token("]")]
+    RBracket,
 }
 
 fn parser<'tokens, 'src: 'tokens, I>()
@@ -69,7 +73,20 @@ where
             })
             .labelled("list")
             .delimited_by(just(Token::LParen), just(Token::RParen));
-        bool.or(atom).or(string).or(number).or(quoted).or(list)
+        let array = sexpr
+            .clone()
+            .repeated()
+            .at_least(0)
+            .collect::<Vec<_>>()
+            .delimited_by(just(Token::LBracket), just(Token::RBracket))
+            .map(Value::Array)
+            .labelled("array");
+        bool.or(atom)
+            .or(string)
+            .or(number)
+            .or(quoted)
+            .or(list)
+            .or(array)
     })
 }
 

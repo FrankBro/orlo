@@ -28,7 +28,7 @@ pub fn run() {
                 let ty = match get_type(&mut type_env, &value) {
                     Ok(ty) => ty,
                     Err(e) => {
-                        println!("Type error: {:?}", e);
+                        println!("Type error: {:?} for {}", e, input);
                         String::from("error")
                     }
                 };

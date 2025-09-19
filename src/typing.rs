@@ -13,6 +13,8 @@ pub type Level = i64;
 pub enum Type {
     Const(String),
     App(Box<Type>, Vec<Type>),
+    // This is syntactic sugar for App(Const("array"), [ty])
+    Array(Box<Type>),
     Arrow(Box<Type>, Box<Type>), // params (list) + vararg + ret
     Var(Id),
     // List
@@ -66,6 +68,10 @@ pub fn replace_ty_constants_with_vars(env: &HashMap<String, Type>, ty: Type) -> 
             let param = Box::new(replace_ty_constants_with_vars(env, *param));
             let ret = Box::new(replace_ty_constants_with_vars(env, *ret));
             Type::Arrow(param, ret)
+        }
+        Type::Array(ty) => {
+            let ty = Box::new(replace_ty_constants_with_vars(env, *ty));
+            Type::Array(ty)
         }
         Type::ListNil => Type::ListNil,
         Type::ListVarArg(vararg) => {
@@ -163,11 +169,16 @@ where
                 })
             })
             .labelled("list type");
+        let array = ty
+            .clone()
+            .map(|ty| Type::Array(Box::new(ty)))
+            .delimited_by(just(Token::LBracket), just(Token::RBracket))
+            .labelled("array type");
         let paren = just(Token::LParen)
             .ignore_then(fn_ty.or(list))
             .then_ignore(just(Token::RParen))
             .labelled("parenthesized type");
-        paren.or(app).or(atom)
+        array.or(paren).or(app).or(atom)
     })
 }
 
@@ -280,6 +291,7 @@ mod tests {
             ),
             ("()", Type::ListNil),
             ("(int int)", list(vec![int(), int()], None)),
+            ("[int]", Type::Array(Box::new(int()))),
             // ("forall[a b] ((a -> a) -> b) -> b"),
             // ("forall[a b] (a -> a -> b) -> a -> b"),
             // ("forall[a b] (a -> b) -> a -> b"),

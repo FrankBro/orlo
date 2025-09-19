@@ -31,6 +31,7 @@ pub enum PrimitiveFunc {
     Cons,
     Eqv,
     Equal,
+    Push,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -50,6 +51,7 @@ pub enum Value {
     Atom(String),
     List(Vec<Value>),
     DottedList(Vec<Value>, Box<Value>),
+    Array(Vec<Value>),
     Number(i64),
     String(String),
     Bool(bool),
@@ -76,6 +78,9 @@ impl Display for Value {
             }
             Value::DottedList(xs, x) => {
                 write!(f, "({} . {})", intersperse(xs), x)
+            }
+            Value::Array(xs) => {
+                write!(f, "[{}]", intersperse(xs))
             }
             Value::PrimitiveFunc(_) => write!(f, "<primitive>"),
             Value::Func {
