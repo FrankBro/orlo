@@ -297,7 +297,7 @@ mod tests {
             ("(my-count 3)", Ok("8")),
             ("(my-count 6)", Ok("14")),
             ("(my-count 5)", Ok("19")),
-            ("(load \"stdlib.scm\")", Ok("(lambda (pred lst) ...)")),
+            ("(load \"../stdlib.scm\")", Ok("(lambda (pred lst) ...)")),
             ("(map (curry + 2) '(1 2 3 4))", Ok("(3 4 5 6)")),
             ("(filter even? '(1 2 3 4))", Ok("(2 4)")),
         ];
