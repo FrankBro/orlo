@@ -4,5 +4,6 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-chumsky = "0.10.1"
+# need these features to compile to wasm
+chumsky = { version = "0.10.1", features = ["std"], default-features = false }
 logos = "0.15.1"
