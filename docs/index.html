@@ -1,0 +1,36 @@
+<!doctype html>
+<html>
+    <head>
+        <script src="https://code.jquery.com/jquery-3.3.1.min.js"></script>
+        <script src="https://unpkg.com/jquery.terminal@2.x.x/js/jquery.terminal.min.js"></script>
+        <link
+            rel="stylesheet"
+            href="https://unpkg.com/jquery.terminal@2.x.x/css/jquery.terminal.min.css"
+        />
+    </head>
+    <body>
+        <div id="terminal"></div>
+        <script type="module">
+            import { Repl } from "./repl.js";
+            $(function () {
+                const repl = new Repl();
+
+                $("#terminal").terminal(
+                    async (command, term) => {
+                        const result = await repl.eval(command);
+                        if (result) {
+                            term.echo(result);
+                        }
+                    },
+                    {
+                        greetings: "Orlo Terminal",
+                        name: "orlo_terminal",
+                        height: 400,
+                        width: 800,
+                        prompt: "orlo> ",
+                    },
+                );
+            });
+        </script>
+    </body>
+</html>
