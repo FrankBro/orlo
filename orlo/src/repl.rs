@@ -1,44 +1,58 @@
-use std::io::{self, BufRead, Write};
+use crate::{
+    env::{self, Env},
+    error,
+    eval::eval,
+    infer,
+    parser::parse,
+    value::Value,
+};
 
-use crate::{env::Env, eval::eval, infer, parser::parse, value::Value};
-
-fn print(line: &str) {
-    print!("{}", line);
-    io::stdout().flush().unwrap();
+pub enum Error {
+    Parse,
+    Eval(error::Error),
+    Infer(infer::Error),
 }
 
-fn get_type(env: &mut infer::Env, value: &Value) -> Result<String, infer::Error> {
-    let ty = env.infer_value(value)?;
-    env.ty_to_string(&ty)
+type Result<T, E = Error> = std::result::Result<T, E>;
+
+pub struct The {
+    ty: String,
+    value: String,
 }
 
-pub fn run() {
-    let mut env = Env::primitive_bindings();
-    print("orlo>>> ");
-    let stdin = io::stdin();
-    let mut type_env = infer::Env::primitive_bindings();
-    for line in stdin.lock().lines() {
-        let line = line.unwrap();
-        let input = line.trim_end();
-        if input == "quit" {
-            return;
+impl std::fmt::Display for The {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "(the {} {})", self.ty, self.value)
+    }
+}
+
+pub struct Repl {
+    eval: env::Env,
+    infer: infer::Env,
+}
+
+impl Default for Repl {
+    fn default() -> Self {
+        Self {
+            eval: Env::primitive_bindings(),
+            infer: infer::Env::primitive_bindings(),
         }
-        match parse(input) {
-            Ok(value) => {
-                let ty = match get_type(&mut type_env, &value) {
-                    Ok(ty) => ty,
-                    Err(e) => {
-                        println!("Type error: {:?} for {}", e, input);
-                        String::from("error")
-                    }
-                };
-                match eval(&mut env, &value) {
-                    Ok(value) => println!("(the {} {})", ty, value),
-                    Err(e) => println!("Eval error: {}", e),
-                }
-            }
-            Err(e) => println!("Parse error: {:?}", e),
-        }
-        print("orlo>>> ");
+    }
+}
+
+impl Repl {
+    fn get_type(&mut self, value: &Value) -> Result<String, infer::Error> {
+        let ty = self.infer.infer_value(value)?;
+        self.infer.ty_to_string(&ty)
+    }
+
+    pub fn handle_input(&mut self, input: &str) -> Result<The, Error> {
+        let value = parse(input).map_err(|_| Error::Parse)?;
+        let ty = self.get_type(&value).map_err(Error::Infer)?;
+        let evaluated = eval(&mut self.eval, &value).map_err(Error::Eval)?;
+        Ok(The {
+            ty,
+            value: evaluated.to_string(),
+        })
     }
 }
