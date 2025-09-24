@@ -12,3 +12,7 @@ pub mod value;
 #[cfg(test)]
 #[path = "tests/let_tests.rs"]
 mod let_tests;
+
+#[cfg(test)]
+#[path = "tests/array_tests.rs"]
+mod array_tests;

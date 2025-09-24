@@ -3,9 +3,9 @@ use crate::repl::Repl;
 #[test]
 fn tests() {
     let cases: &[(&str, &str)] = &[
-        ("(let ((x 1)) x)", "(the int 1)"),
-        ("(let ((x 1) (y 2)) x)", "(the int 1)"),
-        ("(let ((x 1) (y 2)) y)", "(the int 2)"),
+        ("[]", "(the [a] [])"),
+        ("[1]", "(the [int] [1])"),
+        ("[1 2]", "(the [int] [1 2])"),
     ];
     let mut repl = Repl::default();
     for (input, expected) in cases {
