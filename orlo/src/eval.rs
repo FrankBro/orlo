@@ -195,6 +195,39 @@ pub fn eval(env: &mut Env, val: &Value) -> Result<Value> {
                 }
                 ret.ok_or(Error::EmptyBody)
             }
+            [Value::Atom(atom), Value::List(bindings), body @ ..] if atom == "let" => {
+                let closure = env.make_closure();
+                for binding in bindings {
+                    match binding {
+                        Value::List(pair) if pair.len() == 2 => {
+                            let var = match &pair[0] {
+                                Value::Atom(var) => var,
+                                _ => {
+                                    return Err(Error::BadSpecialForm(
+                                        "unrecognized special form".to_owned(),
+                                        val.clone(),
+                                    ));
+                                }
+                            };
+                            let expr = &pair[1];
+                            let value = eval(env, expr)?;
+                            env.define_var(var.clone(), value);
+                        }
+                        _ => {
+                            return Err(Error::BadSpecialForm(
+                                "unrecognized special form".to_owned(),
+                                val.clone(),
+                            ));
+                        }
+                    }
+                }
+                let mut ret = None;
+                for expr in body {
+                    ret = Some(eval(env, expr)?);
+                }
+                env.load_closure(closure);
+                ret.ok_or(Error::EmptyBody)
+            }
             [func, args @ ..] => {
                 let func = eval(env, func)?;
                 let args = args

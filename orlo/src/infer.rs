@@ -371,6 +371,40 @@ impl Env {
                     }
                     Ok(ret.unwrap_or(Type::Const("void".to_owned())))
                 }
+                [Value::Atom(atom), Value::List(bindings), body @ ..] if atom == "let" => {
+                    let old_vars = self.vars.clone();
+                    for binding in bindings {
+                        match binding {
+                            Value::List(pair) if pair.len() == 2 => {
+                                let var = match &pair[0] {
+                                    Value::Atom(name) => name,
+                                    other => {
+                                        return Err(Error::FunctionArgNotSymbol(format!(
+                                            "{:?} is not a symbol",
+                                            other
+                                        )));
+                                    }
+                                };
+                                let var_ty = self.infer(level + 1, &pair[1])?;
+                                self.generalize(level, &var_ty)?;
+                                self.vars.insert(var.clone(), var_ty);
+                            }
+                            other => {
+                                return Err(Error::BadSpecialForm(
+                                    "let bindings must be pairs".to_owned(),
+                                    other.clone(),
+                                ));
+                            }
+                        }
+                    }
+                    let mut ret_ty = Type::Const("void".to_owned());
+                    for val in body {
+                        let body_ty = self.infer(level, val)?;
+                        ret_ty = body_ty;
+                    }
+                    self.vars = old_vars;
+                    Ok(ret_ty)
+                }
                 [func, args @ ..] => {
                     let f_ty = self.infer(level, func)?;
                     let (params, ret) = self.match_fun_ty(args.len(), f_ty)?;
@@ -414,7 +448,7 @@ impl Env {
         }
     }
 
-    fn generalize(&mut self, level: Level, ty: &Type) -> Result<()> {
+    pub fn generalize(&mut self, level: Level, ty: &Type) -> Result<()> {
         match ty {
             Type::Var(id) => {
                 let tvar = self.get_mut_tvar(*id)?;
@@ -749,7 +783,7 @@ impl Env {
         define_primitive_func(&mut env, "eq?", PrimitiveFunc::Eqv);
         define_primitive_func(&mut env, "eqv?", PrimitiveFunc::Eqv);
         define_primitive_func(&mut env, "equal?", PrimitiveFunc::Equal);
-        define_primitive_func(&mut env, "push?", PrimitiveFunc::Push);
+        define_primitive_func(&mut env, "push!", PrimitiveFunc::Push);
         define_io_func(&mut env, "apply", IOFunc::Apply);
         // define_io_func(&mut env, "open-input-file", IOFunc::MakeReadPort);
         // define_io_func(&mut env, "open-output-file", IOFunc::MakeWritePort);

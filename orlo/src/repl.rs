@@ -7,6 +7,7 @@ use crate::{
     value::Value,
 };
 
+#[derive(Debug)]
 pub enum Error {
     Parse,
     Eval(error::Error),
@@ -43,6 +44,7 @@ impl Default for Repl {
 impl Repl {
     fn get_type(&mut self, value: &Value) -> Result<String, infer::Error> {
         let ty = self.infer.infer_value(value)?;
+        self.infer.generalize(-1, &ty).unwrap();
         self.infer.ty_to_string(&ty)
     }
 

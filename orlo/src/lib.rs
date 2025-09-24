@@ -8,3 +8,7 @@ pub mod repl;
 pub mod typing;
 pub mod util;
 pub mod value;
+
+#[cfg(test)]
+#[path = "tests/let_tests.rs"]
+mod let_tests;
