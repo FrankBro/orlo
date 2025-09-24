@@ -405,6 +405,84 @@ impl Env {
                     self.vars = old_vars;
                     Ok(ret_ty)
                 }
+                [
+                    Value::Atom(atom),
+                    Value::Atom(name),
+                    Value::List(bindings),
+                    body @ ..,
+                ] if atom == "let" => {
+                    let old_vars = self.vars.clone();
+
+                    // Create a new environment for the named function
+                    let mut vars_types = Vec::new();
+                    let mut param_names = Vec::new();
+
+                    // Process bindings to collect variables and their types
+                    for binding in bindings {
+                        match binding {
+                            Value::List(pair) if pair.len() == 2 => {
+                                let var = match &pair[0] {
+                                    Value::Atom(var_name) => var_name,
+                                    other => {
+                                        return Err(Error::FunctionArgNotSymbol(format!(
+                                            "{:?} is not a symbol",
+                                            other
+                                        )));
+                                    }
+                                };
+                                param_names.push(var.clone());
+                                let var_ty = self.infer(level + 1, &pair[1])?;
+                                self.generalize(level, &var_ty)?;
+                                vars_types.push((var.clone(), var_ty.clone()));
+                                self.vars.insert(var.clone(), var_ty);
+                            }
+                            other => {
+                                return Err(Error::BadSpecialForm(
+                                    "let bindings must be pairs".to_owned(),
+                                    other.clone(),
+                                ));
+                            }
+                        }
+                    }
+
+                    // Define the recursive function type
+                    let mut param_tys = Vec::new();
+                    for (_, ty) in &vars_types {
+                        param_tys.push(ty.clone());
+                    }
+
+                    // Create function type (params -> ret_ty)
+                    // Create param list structure
+                    let init = Type::ListNil;
+                    let params_list = param_tys.iter().rev().fold(init, |acc, param| {
+                        Type::ListCons(Box::new(param.clone()), Box::new(acc))
+                    });
+
+                    // Create a temporary return type
+                    let ret_ty_var = self.new_unbound_tvar(level);
+
+                    // Create the function type
+                    let arrow = Type::Arrow(Box::new(params_list), Box::new(ret_ty_var.clone()));
+
+                    // Bind the function name in the environment BEFORE inferring the body
+                    // This allows recursive references to work properly
+                    self.vars.insert(name.clone(), arrow.clone());
+
+                    // Infer return type from the body
+                    let mut ret_ty = Type::Const("void".to_owned());
+                    for val in body {
+                        let body_ty = self.infer(level, val)?;
+                        ret_ty = body_ty;
+                    }
+
+                    // Unify the return type with what we found
+                    self.unify(&ret_ty_var, &ret_ty)?;
+
+                    // Restore the original environment
+                    self.vars = old_vars;
+
+                    Ok(ret_ty)
+                }
                 [func, args @ ..] => {
                     let f_ty = self.infer(level, func)?;
                     let (params, ret) = self.match_fun_ty(args.len(), f_ty)?;

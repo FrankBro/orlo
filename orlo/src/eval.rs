@@ -228,6 +228,69 @@ pub fn eval(env: &mut Env, val: &Value) -> Result<Value> {
                 env.load_closure(closure);
                 ret.ok_or(Error::EmptyBody)
             }
+            [
+                Value::Atom(atom),
+                Value::Atom(name),
+                Value::List(bindings),
+                body @ ..,
+            ] if atom == "let" => {
+                let closure = env.make_closure();
+                // Extract variables and values from bindings
+                let mut vars = Vec::new();
+                let mut values = Vec::new();
+                for binding in bindings {
+                    match binding {
+                        Value::List(pair) if pair.len() == 2 => {
+                            let var = match &pair[0] {
+                                Value::Atom(var) => var,
+                                _ => {
+                                    return Err(Error::BadSpecialForm(
+                                        "unrecognized special form".to_owned(),
+                                        val.clone(),
+                                    ));
+                                }
+                            };
+                            vars.push(var.clone());
+                            values.push(eval(env, &pair[1])?);
+                        }
+                        _ => {
+                            return Err(Error::BadSpecialForm(
+                                "unrecognized special form".to_owned(),
+                                val.clone(),
+                            ));
+                        }
+                    }
+                }
+
+                // Create a function that can be called recursively
+                let params = vars.clone();
+                let vararg = None;
+                let func_body = body.to_vec();
+                let func_closure = env.make_closure();
+                let func = Value::Func {
+                    params,
+                    vararg,
+                    body: func_body,
+                    closure: func_closure.clone(),
+                };
+
+                // Define the named function in the environment BEFORE evaluating the body
+                // so the recursive calls inside the body can find it
+                env.define_var(name.clone(), func);
+
+                // Define the initial variables
+                for (var, value) in vars.iter().zip(values.iter()) {
+                    env.define_var(var.clone(), value.clone());
+                }
+
+                // Evaluate the body
+                let mut ret = None;
+                for expr in body {
+                    ret = Some(eval(env, expr)?);
+                }
+                env.load_closure(closure);
+                ret.ok_or(Error::EmptyBody)
+            }
             [func, args @ ..] => {
                 let func = eval(env, func)?;
                 let args = args
