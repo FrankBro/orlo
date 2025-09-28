@@ -31,7 +31,6 @@ pub enum PrimitiveFunc {
     Cons,
     Eqv,
     Equal,
-    Push,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

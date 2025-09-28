@@ -3,12 +3,16 @@ use crate::repl::Repl;
 #[test]
 fn tests() {
     let cases: &[(&str, &str)] = &[
-        ("[]", "(the [a] [])"),
-        ("[1]", "(the [int] [1])"),
-        ("[1 2]", "(the [int] [1 2])"),
-        // test push
+        ("(define res 0)", "(the int 0)"),
+        ("(for ((x [1 2 3])) (set! res (+ res x)))", "(the void ())"),
+        ("res", "(the int 6)"),
+        //
         ("(define arr [])", "(the [a] [])"),
-        ("(push! arr 1)", "(the [int] [1])"),
+        (
+            "(for ((x [2 1]) (y [1 0])) (push! arr (- x y)))",
+            "(the void ())",
+        ),
+        ("arr", "(the [int] [1 2 0 1])"),
     ];
     let mut repl = Repl::default();
     for (input, expected) in cases {

@@ -16,3 +16,7 @@ mod let_tests;
 #[cfg(test)]
 #[path = "tests/array_tests.rs"]
 mod array_tests;
+
+#[cfg(test)]
+#[path = "tests/for_tests.rs"]
+mod for_tests;

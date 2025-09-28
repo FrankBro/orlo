@@ -152,7 +152,6 @@ impl Env {
         define_primitive_func(&mut env, "eq?", PrimitiveFunc::Eqv);
         define_primitive_func(&mut env, "eqv?", PrimitiveFunc::Eqv);
         define_primitive_func(&mut env, "equal?", PrimitiveFunc::Equal);
-        define_primitive_func(&mut env, "push!", PrimitiveFunc::Push);
         define_io_func(&mut env, "apply", IOFunc::Apply);
         define_io_func(&mut env, "open-input-file", IOFunc::MakeReadPort);
         define_io_func(&mut env, "open-output-file", IOFunc::MakeWritePort);

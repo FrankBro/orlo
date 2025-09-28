@@ -33,7 +33,6 @@ pub fn apply(env: &mut Env, val: &Value, args: &[Value]) -> Result<Value> {
             PrimitiveFunc::Cons => primitive::cons(args),
             PrimitiveFunc::Eqv => primitive::eqv(args),
             PrimitiveFunc::Equal => primitive::equal(args),
-            PrimitiveFunc::Push => primitive::push_(args),
         },
         Value::IOFunc(func) => match func {
             IOFunc::Apply => primitive::apply_proc(env, args),
@@ -94,6 +93,18 @@ pub fn eval(env: &mut Env, val: &Value) -> Result<Value> {
             [Value::Atom(atom), Value::Atom(var), form] if atom == "set!" => {
                 let val = eval(env, form)?;
                 env.set_var(var, val)
+            }
+            [Value::Atom(atom), Value::Atom(var), element] if atom == "push!" => {
+                let element_val = eval(env, element)?;
+                let array_val = env.get_var(var)?;
+                match array_val {
+                    Value::Array(arr) => {
+                        let mut new_arr = arr.clone();
+                        new_arr.push(element_val);
+                        env.set_var(var, Value::Array(new_arr))
+                    }
+                    _ => Err(Error::TypeMismatch("array".to_string(), array_val.clone())),
+                }
             }
             [Value::Atom(atom), Value::Atom(var), form] if atom == "define" => {
                 let val = eval(env, form)?;
@@ -290,6 +301,122 @@ pub fn eval(env: &mut Env, val: &Value) -> Result<Value> {
                 }
                 env.load_closure(closure);
                 ret.ok_or(Error::EmptyBody)
+            }
+            [Value::Atom(atom), Value::List(bindings), body @ ..] if atom == "for" => {
+                // TODO: AI code needs to be reviewed and rewritten probably
+                if body.is_empty() {
+                    return Err(Error::EmptyBody);
+                }
+
+                // Extract bindings
+                let mut var_names = Vec::new();
+                let mut arrays = Vec::new();
+
+                for binding in bindings {
+                    match binding {
+                        Value::List(pair) if pair.len() == 2 => {
+                            let var = match &pair[0] {
+                                Value::Atom(var) => var.clone(),
+                                _ => {
+                                    return Err(Error::BadSpecialForm(
+                                        "for: variable name must be a symbol".to_owned(),
+                                        val.clone(),
+                                    ));
+                                }
+                            };
+
+                            let array_expr = &pair[1];
+                            let array_val = eval(env, array_expr)?;
+
+                            match array_val {
+                                Value::Array(items) => {
+                                    var_names.push(var);
+                                    arrays.push(items);
+                                }
+                                _ => {
+                                    return Err(Error::BadSpecialForm(
+                                        "for: right side of binding must be an array".to_owned(),
+                                        array_val,
+                                    ));
+                                }
+                            }
+                        }
+                        _ => {
+                            return Err(Error::BadSpecialForm(
+                                "for: bindings must be pairs".to_owned(),
+                                val.clone(),
+                            ));
+                        }
+                    }
+                }
+
+                // Check that all arrays have the same length
+                if !arrays.is_empty() {
+                    // Check if any arrays are empty
+                    for array in &arrays {
+                        if array.len() == 0 {
+                            // If any array is empty, return () immediately
+                            return Ok(Value::List(vec![]));
+                        }
+                    }
+
+                    // Helper function to recursively execute nested loops
+                    fn execute_nested_loops(
+                        env: &mut Env,
+                        var_names: &[String],
+                        arrays: &[Vec<Value>],
+                        body: &[Value],
+                        current_index: usize,
+                        current_bindings: &mut Vec<(String, Value)>,
+                    ) -> Result<()> {
+                        if current_index == var_names.len() {
+                            // We have a complete set of bindings, apply them and run the body
+                            env.make_closure();
+
+                            // Define all variables in the environment
+                            for (var_name, value) in current_bindings.iter() {
+                                env.define_var(var_name.clone(), value.clone());
+                            }
+
+                            // Evaluate the body in this environment
+                            for expr in body {
+                                eval(env, expr)?;
+                            }
+
+                            return Ok(());
+                        }
+
+                        // Get current variable and array
+                        let var_name = &var_names[current_index];
+                        let array = &arrays[current_index];
+
+                        // Iterate through the current array
+                        for item in array {
+                            current_bindings.push((var_name.clone(), item.clone()));
+                            execute_nested_loops(
+                                env,
+                                var_names,
+                                arrays,
+                                body,
+                                current_index + 1,
+                                current_bindings,
+                            )?;
+                            current_bindings.pop();
+                        }
+
+                        Ok(())
+                    }
+
+                    // Start the nested loops with an empty set of bindings
+                    let mut current_bindings = Vec::new();
+                    execute_nested_loops(env, &var_names, &arrays, body, 0, &mut current_bindings)?;
+
+                    // Return void/nil equivalent
+                    Ok(Value::List(vec![]))
+                } else {
+                    // Empty bindings (no arrays specified), return void
+                    Ok(Value::List(vec![]))
+                }
             }
             [func, args @ ..] => {
                 let func = eval(env, func)?;

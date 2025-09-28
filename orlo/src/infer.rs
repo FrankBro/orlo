@@ -68,6 +68,16 @@ impl Env {
         self.tvars.get_mut(id).ok_or(Error::TypeVarNotFound(id))
     }
 
+    fn prune_type(&self, ty: &Type) -> Result<Type> {
+        match ty {
+            Type::Var(id) => match self.get_tvar(*id)? {
+                TypeVar::Link(ty) => self.prune_type(ty),
+                _ => Ok(ty.clone()),
+            },
+            _ => Ok(ty.clone()),
+        }
+    }
+
     fn link(&mut self, id: Id, ty: Type) -> Result<()> {
         let tvar = self.get_mut_tvar(id)?;
         *tvar = TypeVar::Link(ty);
@@ -309,10 +319,30 @@ impl Env {
                     Ok(conseq_ty)
                 }
                 [Value::Atom(atom), Value::Atom(var), form] if atom == "set!" => {
-                    let var_ty = self.infer(level + 1, form)?;
+                    let var_ty = self.infer(level, form)?;
                     let old_ty = self.get_var(var)?;
                     self.unify(&old_ty, &var_ty)?;
                     Ok(var_ty)
+                }
+                [Value::Atom(atom), Value::Atom(var), element] if atom == "push!" => {
+                    let element = self.infer(level, element)?;
+
+                    let array = self.get_var(var)?;
+                    let array = self.instantiate(level, array)?;
+
+                    match self.prune_type(&array)? {
+                        Type::Array(elem_ty) => {
+                            self.unify(&elem_ty, &element)?;
+                        }
+                        _ => {
+                            return Err(Error::BadSpecialForm(
+                                "push! requires an array variable".to_owned(),
+                                Value::Atom(var.clone()),
+                            ));
+                        }
+                    }
+
+                    Ok(array)
                 }
                 [Value::Atom(atom), Value::Atom(var), form] if atom == "define" => {
                     let var_ty = self.infer(level + 1, form)?;
@@ -482,6 +512,63 @@ impl Env {
                     self.vars = old_vars;
 
                     Ok(ret_ty)
+                }
+                // (for ((x xs) (y ys)) body...)
+                [Value::Atom(atom), Value::List(bindings), body @ ..] if atom == "for" => {
+                    // Save the old variables
+                    let old_vars = self.vars.clone();
+
+                    // Process each binding
+                    for binding in bindings {
+                        match binding {
+                            Value::List(pair) if pair.len() == 2 => {
+                                let var = match &pair[0] {
+                                    Value::Atom(name) => name,
+                                    other => {
+                                        return Err(Error::FunctionArgNotSymbol(format!(
+                                            "{:?} is not a symbol",
+                                            other
+                                        )));
+                                    }
+                                };
+
+                                // Ensure the right side is an array type
+                                let array_ty = self.infer(level + 1, &pair[1])?;
+
+                                // Extract the element type from the array
+                                let element_ty = match array_ty {
+                                    Type::Array(elem_ty) => *elem_ty,
+                                    _ => {
+                                        return Err(Error::BadSpecialForm(
+                                            "for: right side of binding must be an array"
+                                                .to_owned(),
+                                            pair[1].clone(),
+                                        ));
+                                    }
+                                };
+
+                                // Add the variable with the element type
+                                self.vars.insert(var.clone(), element_ty);
+                            }
+                            other => {
+                                return Err(Error::BadSpecialForm(
+                                    "for: bindings must be pairs".to_owned(),
+                                    other.clone(),
+                                ));
+                            }
+                        }
+                    }
+
+                    // Infer the types of the body for correctness, but ignore the return type
+                    for val in body {
+                        self.infer(level, val)?;
+                    }
+
+                    // Restore the old variables
+                    self.vars = old_vars;
+
+                    // Always return void type for 'for' loops
+                    Ok(Type::Const("void".to_owned()))
                 }
                 [func, args @ ..] => {
                     let f_ty = self.infer(level, func)?;
@@ -861,7 +948,6 @@ impl Env {
         define_primitive_func(&mut env, "eq?", PrimitiveFunc::Eqv);
         define_primitive_func(&mut env, "eqv?", PrimitiveFunc::Eqv);
         define_primitive_func(&mut env, "equal?", PrimitiveFunc::Equal);
-        define_primitive_func(&mut env, "push!", PrimitiveFunc::Push);
         define_io_func(&mut env, "apply", IOFunc::Apply);
         // define_io_func(&mut env, "open-input-file", IOFunc::MakeReadPort);
         // define_io_func(&mut env, "open-output-file", IOFunc::MakeWritePort);
@@ -920,14 +1006,6 @@ impl Env {
                     vec![a.clone(), b.clone()],
                     None,
                     Type::ListCons(Box::new(a), Box::new(b)),
-                )
-            }
-            PrimitiveFunc::Push => {
-                let a = self.new_generic_tvar();
-                Type::arrow(
-                    vec![Type::Array(Box::new(a.clone())), a.clone()],
-                    None,
-                    Type::Array(Box::new(a)),
                 )
             }
             PrimitiveFunc::Eqv => {

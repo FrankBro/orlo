@@ -141,17 +141,6 @@ pub fn cons(vals: &[Value]) -> Result<Value> {
     }
 }
 
-pub fn push_(vals: &[Value]) -> Result<Value> {
-    match vals {
-        [Value::Array(arr), val] => {
-            let mut arr = arr.clone();
-            arr.push(val.clone());
-            Ok(Value::Array(arr))
-        }
-        _ => Err(Error::NumArgs(2, vals.to_vec())),
-    }
-}
-
 fn eqv_impl(vals: &[Value]) -> Result<bool> {
     match vals {
         [Value::Bool(val1), Value::Bool(val2)] => Ok(val1 == val2),
