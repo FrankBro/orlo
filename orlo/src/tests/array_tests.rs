@@ -3,11 +3,11 @@ use crate::repl::Repl;
 #[test]
 fn tests() {
     let cases: &[(&str, &str)] = &[
-        ("[]", "(the [a] [])"),
+        ("[]", "(the [~a] [])"),
         ("[1]", "(the [int] [1])"),
         ("[1 2]", "(the [int] [1 2])"),
         // test push
-        ("(define arr [])", "(the [a] [])"),
+        ("(define arr [])", "(the [~a] [])"),
         ("(push! arr 1)", "(the [int] [1])"),
     ];
     let mut repl = Repl::default();

@@ -47,6 +47,12 @@ impl Env {
         Type::Var(id)
     }
 
+    fn new_weak_tvar(&mut self, level: Level) -> Type {
+        let id = self.tvars.len();
+        self.tvars.push(TypeVar::Weak(level));
+        Type::Var(id)
+    }
+
     fn new_generic_tvar(&mut self) -> Type {
         let id = self.tvars.len();
         self.tvars.push(TypeVar::Generic);
@@ -102,6 +108,16 @@ impl Env {
                         } else {
                             if other_level > tvar_level {
                                 *other_tvar = TypeVar::Unbound(tvar_level);
+                            }
+                            Ok(())
+                        }
+                    }
+                    TypeVar::Weak(other_level) => {
+                        if *other_id == tvar_id {
+                            Err(Error::RecursiveType)
+                        } else {
+                            if other_level > tvar_level {
+                                *other_tvar = TypeVar::Weak(tvar_level);
                             }
                             Ok(())
                         }
@@ -162,6 +178,10 @@ impl Env {
                         self.occurs_check_adjust_levels(*id, level, ty2)?;
                         self.link(*id, ty2.clone())
                     }
+                    TypeVar::Weak(level) => {
+                        self.occurs_check_adjust_levels(*id, level, ty2)?;
+                        self.link(*id, ty2.clone())
+                    }
                     TypeVar::Link(ty1) => self.unify(&ty1, ty2),
                     TypeVar::Generic => Err(Error::CannotUnify(ty1.clone(), ty2.clone())),
                 }
@@ -170,6 +190,10 @@ impl Env {
                 let tvar = self.get_mut_tvar(*id)?;
                 match tvar.clone() {
                     TypeVar::Unbound(level) => {
+                        self.occurs_check_adjust_levels(*id, level, ty1)?;
+                        self.link(*id, ty1.clone())
+                    }
+                    TypeVar::Weak(level) => {
                         self.occurs_check_adjust_levels(*id, level, ty1)?;
                         self.link(*id, ty1.clone())
                     }
@@ -267,7 +291,7 @@ impl Env {
                 }
             }
         }
-        let ty = ty.unwrap_or_else(|| self.new_unbound_tvar(level));
+        let ty = ty.unwrap_or_else(|| self.new_weak_tvar(level));
         Ok(Type::Array(Box::new(ty)))
     }
 
@@ -328,7 +352,6 @@ impl Env {
                     let element = self.infer(level, element)?;
 
                     let array = self.get_var(var)?;
-                    let array = self.instantiate(level, array)?;
 
                     match self.prune_type(&array)? {
                         Type::Array(elem_ty) => {
@@ -360,6 +383,7 @@ impl Env {
                         }
                     };
                     let ty = self.define_arrow(level, &name_args[1..], None, body)?;
+                    self.generalize(level, &ty)?;
                     self.vars.insert(func_name.to_owned(), ty.clone());
                     Ok(ty)
                 }
@@ -377,6 +401,7 @@ impl Env {
                         }
                     };
                     let ty = self.define_arrow(level, &name_args[1..], Some(vararg), body)?;
+                    self.generalize(level, &ty)?;
                     self.vars.insert(func_name.to_owned(), ty.clone());
                     Ok(ty)
                 }
@@ -623,6 +648,7 @@ impl Env {
                         Ok(())
                     }
                     TypeVar::Unbound(_) => Ok(()),
+                    TypeVar::Weak(_) => Ok(()),
                     TypeVar::Link(ty) => self.generalize(level, &ty),
                     TypeVar::Generic => Ok(()),
                 }
@@ -664,6 +690,7 @@ impl Env {
                 let tvar = self.get_tvar(id)?;
                 match tvar.clone() {
                     TypeVar::Unbound(_) => Ok(ty),
+                    TypeVar::Weak(_) => Ok(ty),
                     TypeVar::Link(ty) => self.instantiate_impl(id_vars, level, ty),
                     TypeVar::Generic => {
                         let ty = id_vars
@@ -710,7 +737,7 @@ impl Env {
             Type::Var(id) => {
                 let tvar = self.get_tvar(id)?;
                 match tvar.clone() {
-                    TypeVar::Unbound(level) => {
+                    TypeVar::Unbound(level) | TypeVar::Weak(level) => {
                         let params = (0..num_params)
                             .map(|_| self.new_unbound_tvar(level))
                             .rev()
@@ -743,11 +770,11 @@ impl Env {
     }
 
     pub fn ty_to_string(&self, ty: &Type) -> Result<String> {
-        let mut namer = Namer::new();
+        let mut namer = Namers::new();
         self.ty_to_string_impl(&mut namer, ty)
     }
 
-    fn ty_to_string_impl(&self, namer: &mut Namer, ty: &Type) -> Result<String> {
+    fn ty_to_string_impl(&self, namer: &mut Namers, ty: &Type) -> Result<String> {
         match ty {
             Type::Const(name) => Ok(name.to_string()),
             Type::App(ty, args) => {
@@ -801,12 +828,11 @@ impl Env {
             Type::Var(id) => {
                 let tvar = self.get_tvar(*id)?;
                 match tvar {
-                    TypeVar::Generic => {
-                        let name = namer.get_or_insert(*id);
+                    TypeVar::Link(ty) => self.ty_to_string_impl(namer, ty),
+                    TypeVar::Generic | TypeVar::Unbound(_) | TypeVar::Weak(_) => {
+                        let name = namer.get_or_insert(*id, tvar);
                         Ok(name.to_string())
                     }
-                    TypeVar::Unbound(_) => Ok(format!("_{}", id)),
-                    TypeVar::Link(ty) => self.ty_to_string_impl(namer, ty),
                 }
             }
             Type::Array(ty) => {
@@ -1020,6 +1046,34 @@ impl Env {
     }
 }
 
+struct Namers {
+    unbound: Namer,
+    generic: Namer,
+    weak: Namer,
+}
+
+impl Namers {
+    fn new() -> Self {
+        let unbound = Namer::new();
+        let generic = Namer::new();
+        let weak = Namer::new();
+        Self {
+            unbound,
+            generic,
+            weak,
+        }
+    }
+
+    fn get_or_insert(&mut self, id: Id, var: &TypeVar) -> String {
+        match var {
+            TypeVar::Unbound(_) => format!("_{}", self.unbound.get_or_insert(id)),
+            TypeVar::Generic => format!("{}", self.generic.get_or_insert(id)),
+            TypeVar::Weak(_) => format!("~{}", self.weak.get_or_insert(id)),
+            TypeVar::Link(_) => unreachable!("Link should be resolved before naming"),
+        }
+    }
+}
+
 struct Namer {
     next_name: u8,
     names: HashMap<Id, u8>,
@@ -1120,7 +1174,6 @@ mod tests {
             ("'(\"a\" 1 #t)", "(string int bool)"),
             ("(car '(\"a\" 1 #t))", "string"),
             ("(cdr '(\"a\" 1 #t))", "(int bool)"),
-            ("[]", "[a]"),
             // ("(if (= 3 3) (+ 2 3 (- 5 1)) \"unequal\")", Ok("9")),
             // ("(cdr '(a simple test))", Ok("(simple test)")),
             // ("(car (cdr '(a simple test)))", Ok("simple")),

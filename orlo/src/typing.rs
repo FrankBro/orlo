@@ -91,6 +91,8 @@ pub enum TypeVar {
     Unbound(Level),
     Link(Type),
     Generic,
+    // For things like a mutable empty array that'll be filled later
+    Weak(Level),
 }
 
 #[derive(Logos, Clone, Debug, PartialEq, Eq)]
