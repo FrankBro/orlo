@@ -302,12 +302,24 @@ pub fn eval(env: &mut Env, val: &Value) -> Result<Value> {
                 env.load_closure(closure);
                 ret.ok_or(Error::EmptyBody)
             }
+            [Value::Atom(atom), test, body @ ..] if atom == "while" => {
+                let closure = env.make_closure();
+                while match eval(env, test)? {
+                    Value::Bool(true) => true,
+                    Value::Bool(false) => false,
+                    other => {
+                        return Err(Error::TypeMismatch("boolean".to_owned(), other.clone()));
+                    }
+                } {
+                    for expr in body {
+                        eval(env, expr)?;
+                    }
+                }
+                env.load_closure(closure);
+                Ok(Value::List(vec![]))
+            }
             [Value::Atom(atom), Value::List(bindings), body @ ..] if atom == "for" => {
                 // TODO: AI code needs to be reviewed and rewritten probably
-                if body.is_empty() {
-                    return Err(Error::EmptyBody);
-                }
-
                 // Extract bindings
                 let mut var_names = Vec::new();
                 let mut arrays = Vec::new();

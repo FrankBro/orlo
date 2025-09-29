@@ -538,7 +538,14 @@ impl Env {
 
                     Ok(ret_ty)
                 }
-                // (for ((x xs) (y ys)) body...)
+                [Value::Atom(atom), test, body @ ..] if atom == "while" => {
+                    let test_ty = self.infer(level, test)?;
+                    self.unify(&test_ty, &Type::Const(BOOL.to_owned()))?;
+                    for val in body {
+                        self.infer(level, val)?;
+                    }
+                    Ok(Type::Const("void".to_owned()))
+                }
                 [Value::Atom(atom), Value::List(bindings), body @ ..] if atom == "for" => {
                     // Save the old variables
                     let old_vars = self.vars.clone();

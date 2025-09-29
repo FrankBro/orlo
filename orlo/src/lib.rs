@@ -20,3 +20,7 @@ mod array_tests;
 #[cfg(test)]
 #[path = "tests/for_tests.rs"]
 mod for_tests;
+
+#[cfg(test)]
+#[path = "tests/while_tests.rs"]
+mod while_tests;
