@@ -83,6 +83,13 @@ pub fn eval(env: &mut Env, val: &Value) -> Result<Value> {
         Value::Array(_) => Ok(val.clone()),
         Value::List(vals) => match &vals[..] {
             [Value::Atom(atom), val] if atom == QUOTE => Ok(val.clone()),
+            [Value::Atom(atom), body @ ..] if atom == "list" => {
+                let elements = body
+                    .iter()
+                    .map(|val| eval(env, val))
+                    .collect::<Result<Vec<_>>>()?;
+                Ok(Value::List(elements))
+            }
             [Value::Atom(atom), pred, conseq, alt] if atom == "if" => {
                 let result = eval(env, pred)?;
                 match result {

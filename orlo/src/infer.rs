@@ -334,6 +334,14 @@ impl Env {
                     Value::IOFunc(_) => Ok(Type::Const("io-func".to_owned())),
                     Value::Port(_) => Ok(Type::Const("port".to_owned())),
                 },
+                [Value::Atom(atom), body @ ..] if atom == "list" => {
+                    let mut ty = Type::ListNil;
+                    for val in body.iter().rev() {
+                        let head = self.infer(level, val)?;
+                        ty = Type::ListCons(Box::new(head), Box::new(ty));
+                    }
+                    Ok(ty)
+                }
                 [Value::Atom(atom), pred, conseq, alt] if atom == "if" => {
                     let pred_ty = self.infer(level, pred)?;
                     self.unify(&pred_ty, &Type::Const(BOOL.to_owned()))?;

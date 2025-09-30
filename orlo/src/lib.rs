@@ -24,3 +24,11 @@ mod for_tests;
 #[cfg(test)]
 #[path = "tests/while_tests.rs"]
 mod while_tests;
+
+#[cfg(test)]
+#[path = "tests/list_tests.rs"]
+mod list_tests;
+
+#[cfg(test)]
+#[path = "tests/quasiquote_tests.rs"]
+mod quasiquote_tests;
