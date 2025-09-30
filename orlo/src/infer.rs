@@ -326,7 +326,7 @@ impl Env {
                         Ok(ty)
                     }
                     Value::Array(vals) => self.infer_array(level, vals),
-                    Value::Number(_) => Ok(Type::Const("number".to_owned())),
+                    Value::Number(_) => Ok(Type::Const(INT.to_owned())),
                     Value::String(_) => Ok(Type::Const("string".to_owned())),
                     Value::Bool(_) => Ok(Type::Const("bool".to_owned())),
                     Value::PrimitiveFunc(_) => Ok(Type::Const("primitive-func".to_owned())),
