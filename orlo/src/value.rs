@@ -65,6 +65,12 @@ pub enum Value {
     Port(usize),
 }
 
+impl Value {
+    pub fn quote(&self) -> Self {
+        Value::List(vec![Value::Atom(QUOTE.to_string()), self.clone()])
+    }
+}
+
 impl Display for Value {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {

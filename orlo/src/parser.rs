@@ -36,6 +36,12 @@ pub enum Token<'a> {
     LBracket,
     #[token("]")]
     RBracket,
+    #[token("`")]
+    Quasiquote,
+    #[token(",")]
+    Unquote,
+    #[token(",@")]
+    UnquoteSplicing,
 }
 
 fn parser<'tokens, 'src: 'tokens, I>()
@@ -56,6 +62,18 @@ where
             .ignore_then(sexpr.clone())
             .map(|v| Value::List(vec![Value::Atom("quote".to_string()), v]))
             .labelled("quoted expression");
+        let quasiquoted = just(Token::Quasiquote)
+            .ignore_then(sexpr.clone())
+            .map(|v| Value::List(vec![Value::Atom("quasiquote".to_string()), v]))
+            .labelled("quasiquoted expression");
+        let unquoted = just(Token::Unquote)
+            .ignore_then(sexpr.clone())
+            .map(|v| Value::List(vec![Value::Atom("unquote".to_string()), v]))
+            .labelled("unquoted expression");
+        let unquote_splicing = just(Token::UnquoteSplicing)
+            .ignore_then(sexpr.clone())
+            .map(|v| Value::List(vec![Value::Atom("unquote-splicing".to_string()), v]))
+            .labelled("unquote-splicing expression");
         let list = sexpr
             .clone()
             .repeated()
@@ -85,6 +103,9 @@ where
             .or(string)
             .or(number)
             .or(quoted)
+            .or(quasiquoted)
+            .or(unquoted)
+            .or(unquote_splicing)
             .or(list)
             .or(array)
     })
@@ -97,7 +118,10 @@ pub fn parse<'a>(input: &'a str) -> Result<Value, Vec<Rich<'a, Token<'a>>>> {
     });
     let token_stream =
         Stream::from_iter(token_iter).map((0..input.len()).into(), |(t, s): (_, _)| (t, s));
-    parser().parse(token_stream).into_result()
+    parser()
+        .parse(token_stream)
+        .into_result()
+        .map(|v| expand_quasi_quote(&v))
 }
 
 pub fn parse_multiple<'a>(input: &'a str) -> Result<Vec<Value>, Vec<Rich<'a, Token<'a>>>> {
@@ -113,6 +137,108 @@ pub fn parse_multiple<'a>(input: &'a str) -> Result<Vec<Value>, Vec<Rich<'a, Tok
         .collect::<Vec<_>>()
         .parse(token_stream)
         .into_result()
+        .map(|vals| vals.into_iter().map(|v| expand_quasi_quote(&v)).collect())
+}
+
+fn expand_quasi_quote(form: &Value) -> Value {
+    match form {
+        Value::List(items) if !items.is_empty() => {
+            if let Value::Atom(s) = &items[0] {
+                if s == "quasiquote" && items.len() == 2 {
+                    // Top-level quasiquote
+                    return expand_quasi_quote_inner(&items[1], 1);
+                }
+            }
+            Value::List(items.iter().map(expand_quasi_quote).collect())
+        }
+        Value::DottedList(head, tail) => {
+            let head = head.into_iter().map(expand_quasi_quote).collect();
+            let tail = Box::new(expand_quasi_quote(tail));
+            Value::DottedList(head, tail)
+        }
+        _ => form.clone(),
+    }
+}
+
+fn expand_quasi_quote_inner(form: &Value, depth: u64) -> Value {
+    match form {
+        // TODO: Might need to do something special for arrays
+        Value::Array(_) | Value::Atom(_) | Value::Number(_) | Value::String(_) | Value::Bool(_) => {
+            form.quote()
+        }
+
+        Value::List(items) if items.is_empty() => form.quote(),
+        Value::List(items) => {
+            if let Value::Atom(s) = &items[0] {
+                match s.as_str() {
+                    "quasiquote" if items.len() == 2 => {
+                        let inner = expand_quasi_quote_inner(&items[1], depth + 1);
+                        Value::List(vec![Value::Atom("quasiquote".to_owned()), inner])
+                    }
+                    "unquote" if items.len() == 2 && depth == 1 => items[1].clone(),
+                    "unquote-splicing" if items.len() == 2 && depth == 1 => {
+                        panic!("unquote-splicing invalid outside of list context");
+                    }
+                    _ => expand_list_items(items, depth),
+                }
+            } else {
+                expand_list_items(items, depth)
+            }
+        }
+        Value::DottedList(head, tail) => {
+            let head = head
+                .iter()
+                .map(|v| expand_quasi_quote_inner(v, depth))
+                .collect();
+            let tail = Box::new(expand_quasi_quote_inner(tail, depth));
+            Value::DottedList(head, tail)
+        }
+
+        Value::PrimitiveFunc(_) | Value::Func { .. } | Value::IOFunc(_) | Value::Port(_) => {
+            unreachable!()
+        }
+    }
+}
+
+fn expand_list_items(items: &[Value], depth: u64) -> Value {
+    let mut result = Vec::new();
+
+    for item in items {
+        match item {
+            Value::List(inner) if !inner.is_empty() => {
+                if let Value::Atom(s) = &inner[0] {
+                    if s == "unquote-splicing" && inner.len() == 2 && depth == 1 {
+                        if !result.is_empty() {
+                            let accumulated = Value::List(vec![
+                                Value::Atom("list".to_owned()),
+                                Value::List(result.clone()),
+                            ]);
+                            let appended = Value::List(vec![
+                                Value::Atom("append".to_owned()),
+                                inner[1].clone(),
+                                accumulated,
+                            ]);
+                            return appended;
+                        } else {
+                            return Value::List(vec![
+                                Value::Atom("append".to_owned()),
+                                inner[1].clone(),
+                                Value::List(vec![Value::Atom("list".to_owned())]),
+                            ]);
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+
+        result.push(expand_quasi_quote_inner(item, depth));
+    }
+    Value::List(
+        std::iter::once(Value::Atom("list".to_owned()))
+            .chain(result.into_iter())
+            .collect(),
+    )
 }
 
 #[cfg(test)]
