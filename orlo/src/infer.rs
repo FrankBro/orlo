@@ -334,6 +334,30 @@ impl Env {
                     Value::IOFunc(_) => Ok(Type::Const("io-func".to_owned())),
                     Value::Port(_) => Ok(Type::Const("port".to_owned())),
                 },
+                [Value::Atom(atom), body @ ..] if atom == "append" => {
+                    let mut ty = Type::ListNil;
+
+                    fn append_list(acc: Type, ty: Type) -> Result<Type> {
+                        match ty {
+                            Type::ListCons(head, tail) => {
+                                let acc = append_list(acc, *tail)?;
+                                Ok(Type::ListCons(head, Box::new(acc)))
+                            }
+                            Type::ListNil => Ok(acc),
+                            other => Err(Error::BadSpecialForm(
+                                "append requires list arguments".to_owned(),
+                                Value::Atom(format!("{:?}", other)),
+                            )),
+                        }
+                    }
+
+                    for val in body.iter().rev() {
+                        let arg_ty = self.infer(level, val)?;
+                        let arg_ty = self.prune_type(&arg_ty)?;
+                        ty = append_list(ty, arg_ty)?;
+                    }
+                    Ok(ty)
+                }
                 [Value::Atom(atom), body @ ..] if atom == "list" => {
                     let mut ty = Type::ListNil;
                     for val in body.iter().rev() {

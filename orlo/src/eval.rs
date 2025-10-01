@@ -83,6 +83,18 @@ pub fn eval(env: &mut Env, val: &Value) -> Result<Value> {
         Value::Array(_) => Ok(val.clone()),
         Value::List(vals) => match &vals[..] {
             [Value::Atom(atom), val] if atom == QUOTE => Ok(val.clone()),
+            [Value::Atom(atom), body @ ..] if atom == "append" => {
+                let mut result = Vec::new();
+                for val in body {
+                    match eval(env, val)? {
+                        Value::List(mut lst) => result.append(&mut lst),
+                        other => {
+                            return Err(Error::TypeMismatch("list".to_string(), other.clone()));
+                        }
+                    }
+                }
+                Ok(Value::List(result))
+            }
             [Value::Atom(atom), body @ ..] if atom == "list" => {
                 let elements = body
                     .iter()
