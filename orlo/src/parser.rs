@@ -200,9 +200,7 @@ fn expand_quasi_quote_inner(val: &Value, depth: u64) -> Value {
                     }
                 }
                 Value::Atom(tag) if tag == "unquote-splicing" && items.len() == 2 => {
-                    if depth == 1 {
-                        panic!("unquote-splicing at top level is invalid");
-                    } else if depth > 1 {
+                    if depth > 1 {
                         // At depth > 1, unquote-splicing decreases depth
                         Value::List(vec![
                             Value::Atom("list".to_owned()),
@@ -212,6 +210,9 @@ fn expand_quasi_quote_inner(val: &Value, depth: u64) -> Value {
                             ]),
                             expand_quasi_quote_inner(&items[1], depth - 1),
                         ])
+                    } else if depth == 1 {
+                        // At depth 1, delegate to expand_list_items which handles splicing
+                        expand_list_items(items, depth)
                     } else {
                         // depth == 0: unquote-splicing outside quasiquote, keep as-is
                         Value::List(items.iter().map(|v| expand_quasi_quote(v)).collect())
@@ -252,52 +253,33 @@ fn expand_list_items(items: &[Value], depth: u64) -> Value {
             Value::List(inner) if !inner.is_empty() => {
                 if let Value::Atom(s) = &inner[0] {
                     if s == "unquote-splicing" && inner.len() == 2 && depth == 1 {
-                        // Collect remaining items after this splice
-                        let remaining: Vec<Value> = items[i + 1..]
-                            .iter()
-                            .map(|it| expand_quasi_quote_inner(it, depth))
-                            .collect();
-
                         // The spliced expression itself (expand at depth 0)
                         let splice_expr = expand_quasi_quote_inner(&inner[1], 0);
-
-                        // Build the result maintaining order: (append (list ...before) splice (list ...after))
-                        if result.is_empty() && remaining.is_empty() {
-                            // Only splicing: (append <expr> (list))
+                        
+                        // Recursively process remaining items to handle multiple splices
+                        let remaining_expanded = if i + 1 < items.len() {
+                            expand_list_items(&items[i + 1..], depth)
+                        } else {
+                            Value::List(vec![Value::Atom("list".to_owned())])
+                        };
+                        
+                        // Build the result maintaining order
+                        if result.is_empty() {
+                            // Splicing at start: (append <expr> <remaining>)
                             return Value::List(vec![
                                 Value::Atom("append".to_owned()),
                                 splice_expr,
-                                Value::List(vec![Value::Atom("list".to_owned())]),
-                            ]);
-                        } else if result.is_empty() {
-                            // Splicing at start: (append <expr> (list <remaining>))
-                            let mut list_parts = vec![Value::Atom("list".to_owned())];
-                            list_parts.extend(remaining);
-                            return Value::List(vec![
-                                Value::Atom("append".to_owned()),
-                                splice_expr,
-                                Value::List(list_parts),
-                            ]);
-                        } else if remaining.is_empty() {
-                            // Splicing at end: (append (list <result>) <expr>)
-                            let mut list_parts = vec![Value::Atom("list".to_owned())];
-                            list_parts.extend(result);
-                            return Value::List(vec![
-                                Value::Atom("append".to_owned()),
-                                Value::List(list_parts),
-                                splice_expr,
+                                remaining_expanded,
                             ]);
                         } else {
-                            // Splicing in middle: (append (list <before>) <expr> (list <after>))
+                            // Splicing after some elements: (append (list <before>) <expr> <remaining>)
                             let mut prefix = vec![Value::Atom("list".to_owned())];
                             prefix.extend(result);
-                            let mut suffix = vec![Value::Atom("list".to_owned())];
-                            suffix.extend(remaining);
                             return Value::List(vec![
                                 Value::Atom("append".to_owned()),
                                 Value::List(prefix),
                                 splice_expr,
-                                Value::List(suffix),
+                                remaining_expanded,
                             ]);
                         }
                     }
@@ -309,7 +291,7 @@ fn expand_list_items(items: &[Value], depth: u64) -> Value {
         result.push(expand_quasi_quote_inner(item, depth));
         i += 1;
     }
-
+    
     Value::List(
         std::iter::once(Value::Atom("list".to_owned()))
             .chain(result.into_iter())
