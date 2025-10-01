@@ -160,69 +160,144 @@ fn expand_quasi_quote(form: &Value) -> Value {
     }
 }
 
-fn expand_quasi_quote_inner(form: &Value, depth: u64) -> Value {
-    match form {
-        Value::Atom(_) => form.quote(),
-        // TODO: Might need to do something special for arrays
-        Value::Array(_) | Value::Number(_) | Value::String(_) | Value::Bool(_) => form.clone(),
-
-        Value::List(items) if items.is_empty() => form.quote(),
+fn expand_quasi_quote_inner(val: &Value, depth: u64) -> Value {
+    match val {
         Value::List(items) => {
-            if let Value::Atom(s) = &items[0] {
-                match s.as_str() {
-                    "quasiquote" if items.len() == 2 => {
-                        let inner = expand_quasi_quote_inner(&items[1], depth + 1);
-                        Value::List(vec![Value::Atom("quasiquote".to_owned()), inner])
+            if items.is_empty() {
+                return if depth > 0 {
+                    Value::List(vec![Value::Atom("quote".to_owned()), Value::List(vec![])])
+                } else {
+                    Value::List(vec![])
+                };
+            }
+            match &items[0] {
+                Value::Atom(tag) if tag == "quasiquote" && items.len() == 2 => {
+                    if depth == 0 {
+                        // Quasiquote at depth 0: start new quasiquote context
+                        expand_quasi_quote_inner(&items[1], 1)
+                    } else {
+                        // Nested quasiquote at depth > 0: process at depth 1
+                        expand_quasi_quote_inner(&items[1], 1)
                     }
-                    "unquote" if items.len() == 2 && depth == 1 => items[1].clone(),
-                    "unquote-splicing" if items.len() == 2 && depth == 1 => {
-                        panic!("unquote-splicing invalid outside of list context");
-                    }
-                    _ => expand_list_items(items, depth),
                 }
-            } else {
-                expand_list_items(items, depth)
+                Value::Atom(tag) if tag == "unquote" && items.len() == 2 => {
+                    if depth == 1 {
+                        // At depth 1, unquote evaluates: process inner at depth 0
+                        expand_quasi_quote_inner(&items[1], 0)
+                    } else if depth > 1 {
+                        // At depth > 1, unquote decreases depth
+                        Value::List(vec![
+                            Value::Atom("list".to_owned()),
+                            Value::List(vec![
+                                Value::Atom("quote".to_owned()),
+                                Value::Atom("unquote".to_owned()),
+                            ]),
+                            expand_quasi_quote_inner(&items[1], depth - 1),
+                        ])
+                    } else {
+                        // depth == 0: unquote outside quasiquote, just return the inner value
+                        items[1].clone()
+                    }
+                }
+                Value::Atom(tag) if tag == "unquote-splicing" && items.len() == 2 => {
+                    if depth == 1 {
+                        panic!("unquote-splicing at top level is invalid");
+                    } else if depth > 1 {
+                        // At depth > 1, unquote-splicing decreases depth
+                        Value::List(vec![
+                            Value::Atom("list".to_owned()),
+                            Value::List(vec![
+                                Value::Atom("quote".to_owned()),
+                                Value::Atom("unquote-splicing".to_owned()),
+                            ]),
+                            expand_quasi_quote_inner(&items[1], depth - 1),
+                        ])
+                    } else {
+                        // depth == 0: unquote-splicing outside quasiquote, keep as-is
+                        Value::List(items.iter().map(|v| expand_quasi_quote(v)).collect())
+                    }
+                }
+                _ if depth > 0 => {
+                    // normal list at depth > 0: use expand_list_items to handle unquote-splicing
+                    expand_list_items(items, depth)
+                }
+                _ => {
+                    // normal list at depth 0: just process each element
+                    Value::List(
+                        items
+                            .iter()
+                            .map(|v| expand_quasi_quote_inner(v, 0))
+                            .collect(),
+                    )
+                }
             }
         }
-        Value::DottedList(head, tail) => {
-            let head = head
-                .iter()
-                .map(|v| expand_quasi_quote_inner(v, depth))
-                .collect();
-            let tail = Box::new(expand_quasi_quote_inner(tail, depth));
-            Value::DottedList(head, tail)
-        }
-
-        Value::PrimitiveFunc(_) | Value::Func { .. } | Value::IOFunc(_) | Value::Port(_) => {
-            unreachable!()
-        }
+        // atoms just get quoted if inside a quasiquote
+        Value::Atom(sym) if depth > 0 => Value::List(vec![
+            Value::Atom("quote".to_owned()),
+            Value::Atom(sym.clone()),
+        ]),
+        // At depth 0, atoms stay as-is
+        other => other.clone(),
     }
 }
 
 fn expand_list_items(items: &[Value], depth: u64) -> Value {
     let mut result = Vec::new();
+    let mut i = 0;
 
-    for item in items {
+    while i < items.len() {
+        let item = &items[i];
         match item {
             Value::List(inner) if !inner.is_empty() => {
                 if let Value::Atom(s) = &inner[0] {
                     if s == "unquote-splicing" && inner.len() == 2 && depth == 1 {
-                        if !result.is_empty() {
-                            let accumulated = Value::List(vec![
-                                Value::Atom("list".to_owned()),
-                                Value::List(result.clone()),
-                            ]);
-                            let appended = Value::List(vec![
-                                Value::Atom("append".to_owned()),
-                                inner[1].clone(),
-                                accumulated,
-                            ]);
-                            return appended;
-                        } else {
+                        // Collect remaining items after this splice
+                        let remaining: Vec<Value> = items[i + 1..]
+                            .iter()
+                            .map(|it| expand_quasi_quote_inner(it, depth))
+                            .collect();
+
+                        // The spliced expression itself (expand at depth 0)
+                        let splice_expr = expand_quasi_quote_inner(&inner[1], 0);
+
+                        // Build the result maintaining order: (append (list ...before) splice (list ...after))
+                        if result.is_empty() && remaining.is_empty() {
+                            // Only splicing: (append <expr> (list))
                             return Value::List(vec![
                                 Value::Atom("append".to_owned()),
-                                inner[1].clone(),
+                                splice_expr,
                                 Value::List(vec![Value::Atom("list".to_owned())]),
+                            ]);
+                        } else if result.is_empty() {
+                            // Splicing at start: (append <expr> (list <remaining>))
+                            let mut list_parts = vec![Value::Atom("list".to_owned())];
+                            list_parts.extend(remaining);
+                            return Value::List(vec![
+                                Value::Atom("append".to_owned()),
+                                splice_expr,
+                                Value::List(list_parts),
+                            ]);
+                        } else if remaining.is_empty() {
+                            // Splicing at end: (append (list <result>) <expr>)
+                            let mut list_parts = vec![Value::Atom("list".to_owned())];
+                            list_parts.extend(result);
+                            return Value::List(vec![
+                                Value::Atom("append".to_owned()),
+                                Value::List(list_parts),
+                                splice_expr,
+                            ]);
+                        } else {
+                            // Splicing in middle: (append (list <before>) <expr> (list <after>))
+                            let mut prefix = vec![Value::Atom("list".to_owned())];
+                            prefix.extend(result);
+                            let mut suffix = vec![Value::Atom("list".to_owned())];
+                            suffix.extend(remaining);
+                            return Value::List(vec![
+                                Value::Atom("append".to_owned()),
+                                Value::List(prefix),
+                                splice_expr,
+                                Value::List(suffix),
                             ]);
                         }
                     }
@@ -232,7 +307,9 @@ fn expand_list_items(items: &[Value], depth: u64) -> Value {
         }
 
         result.push(expand_quasi_quote_inner(item, depth));
+        i += 1;
     }
+
     Value::List(
         std::iter::once(Value::Atom("list".to_owned()))
             .chain(result.into_iter())
@@ -259,7 +336,7 @@ mod tests {
             ),
             (
                 "(let ((lst '(2 3))) `(1 ,@lst 4))",
-                "(let ((lst (quote (2 3)))) (append lst (list 1 4)))",
+                "(let ((lst (quote (2 3)))) (append (list 1) lst (list 4)))",
             ),
         ];
         for (input, expected) in cases {
