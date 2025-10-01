@@ -162,10 +162,9 @@ fn expand_quasi_quote(form: &Value) -> Value {
 
 fn expand_quasi_quote_inner(form: &Value, depth: u64) -> Value {
     match form {
+        Value::Atom(_) => form.quote(),
         // TODO: Might need to do something special for arrays
-        Value::Array(_) | Value::Atom(_) | Value::Number(_) | Value::String(_) | Value::Bool(_) => {
-            form.quote()
-        }
+        Value::Array(_) | Value::Number(_) | Value::String(_) | Value::Bool(_) => form.clone(),
 
         Value::List(items) if items.is_empty() => form.quote(),
         Value::List(items) => {
@@ -247,6 +246,27 @@ mod tests {
         parser::{parse, parse_multiple},
         value::Value,
     };
+
+    #[test]
+    fn quasiquote_expansion() {
+        let cases = vec![
+            ("`a", "(quote a)"),
+            ("`(1 2 3)", "(list 1 2 3)"),
+            ("(let ((x 10)) `(1 ,x 3))", "(let ((x 10)) (list 1 x 3))"),
+            (
+                "(let ((x 1) (y 2)) ``(a ,x ,(list ,y 3)))",
+                "(let ((x 1) (y 2)) (list (quote a) x (list y 3)))",
+            ),
+            (
+                "(let ((lst '(2 3))) `(1 ,@lst 4))",
+                "(let ((lst (quote (2 3)))) (append lst (list 1 4)))",
+            ),
+        ];
+        for (input, expected) in cases {
+            let expanded = parse(input).unwrap();
+            assert_eq!(expanded.to_string(), expected);
+        }
+    }
 
     fn atom(name: &str) -> Value {
         Value::Atom(name.to_string())

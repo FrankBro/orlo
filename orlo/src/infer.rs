@@ -17,7 +17,7 @@ pub enum Error {
     VarNotFound(String),
     BadSpecialForm(String, Value),
     UnexpectedNumberOfArguments { expected: usize, actual: usize },
-    ExpectedAFunction,
+    ExpectedAFunction(Type),
     RecursiveType,
     CannotUnify(Type, Type),
     FunctionArgNotSymbol(String),
@@ -789,10 +789,10 @@ impl Env {
                         Ok((params, ret))
                     }
                     TypeVar::Link(ty) => self.match_fun_ty(num_params, ty),
-                    TypeVar::Generic => Err(Error::ExpectedAFunction),
+                    TypeVar::Generic => Err(Error::ExpectedAFunction(ty)),
                 }
             }
-            _ => Err(Error::ExpectedAFunction),
+            _ => Err(Error::ExpectedAFunction(ty)),
         }
     }
 
@@ -852,8 +852,8 @@ impl Env {
                             break;
                         }
                         Type::ListNil => break,
-                        _ => {
-                            return Err(Error::ExpectedAFunction);
+                        ty => {
+                            return Err(Error::ExpectedAFunction(ty.clone()));
                         }
                     }
                     i += 1;

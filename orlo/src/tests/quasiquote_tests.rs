@@ -6,6 +6,8 @@ fn tests() {
         ("`a", "(the symbol a)"),
         ("`(1 2 3)", "(the (int int int) (1 2 3))"),
         ("(let ((x 10)) `(1 ,x 3))", ("(the (int int int) (1 10 3))")),
+        // ("(let ((x 1) (y 2)) ``(a ,x ,(list ,y 3)))", ""),
+        ("(let ((lst '(2 3))) `(1 ,@lst 4))", ""),
     ];
     let mut repl = Repl::default();
     for (input, expected) in cases {
