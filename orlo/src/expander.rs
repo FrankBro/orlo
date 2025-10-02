@@ -104,10 +104,7 @@ impl Expander {
                     let mut env = Env::default();
                     let (args, vararg) = if macro_def.vararg.is_some() {
                         let (fixed_args, vararg_vals) = args.split_at(macro_def.params.len());
-                        (
-                            fixed_args.to_vec(),
-                            Some(Value::List(vararg_vals.to_vec()).quote()),
-                        )
+                        (fixed_args.to_vec(), Some(Value::List(vararg_vals.to_vec())))
                     } else {
                         (args.to_vec(), None)
                     };

@@ -32,6 +32,14 @@ fn tests() {
         ("(first '(1 2 3))", "(the int 1)"),
         // Nested macro expansion
         ("(square (square 2))", "(the int 16)"),
+        // Macro with varargs (dotted list)
+        (
+            "(define-macro (my-when condition . body) `(if ,condition (begin ,@body) 0))",
+            "(the symbol my-when)",
+        ),
+        ("(my-when #t (+ 1 2))", "(the int 3)"),
+        ("(my-when #t (+ 1 2) (* 3 4))", "(the int 12)"),
+        ("(my-when #f (+ 1 2))", "(the int 0)"),
     ];
 
     let mut repl = Repl::default();
