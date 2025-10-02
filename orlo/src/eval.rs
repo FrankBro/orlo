@@ -82,6 +82,12 @@ pub fn eval(env: &mut Env, val: &Value) -> Result<Value> {
         Value::Atom(id) => env.get_var(id).cloned(),
         Value::Array(_) => Ok(val.clone()),
         Value::List(vals) => match &vals[..] {
+            [
+                Value::Atom(atom),
+                Value::Atom(name),
+                Value::List(_params),
+                _body,
+            ] if atom == "define-macro" => Ok(Value::Atom(name.to_owned())),
             [Value::Atom(atom), val] if atom == QUOTE => Ok(val.clone()),
             [Value::Atom(atom), body @ ..] if atom == "append" => {
                 let mut result = Vec::new();

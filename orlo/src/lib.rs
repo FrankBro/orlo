@@ -1,6 +1,7 @@
 pub mod env;
 pub mod error;
 pub mod eval;
+pub mod expander;
 pub mod infer;
 pub mod parser;
 pub mod primitive;
@@ -32,3 +33,7 @@ mod list_tests;
 #[cfg(test)]
 #[path = "tests/quasiquote_tests.rs"]
 mod quasiquote_tests;
+
+#[cfg(test)]
+#[path = "tests/macro_tests.rs"]
+mod macro_tests;

@@ -2,6 +2,7 @@ use crate::{
     env::{self, Env},
     error,
     eval::eval,
+    expander::Expander,
     infer,
     parser::parse,
     value::Value,
@@ -30,6 +31,7 @@ impl std::fmt::Display for The {
 pub struct Repl {
     eval: env::Env,
     infer: infer::Env,
+    expander: Expander,
 }
 
 impl Default for Repl {
@@ -37,6 +39,7 @@ impl Default for Repl {
         Self {
             eval: Env::primitive_bindings(),
             infer: infer::Env::primitive_bindings(),
+            expander: Expander::new(),
         }
     }
 }
@@ -50,8 +53,9 @@ impl Repl {
 
     pub fn handle_input(&mut self, input: &str) -> Result<The, Error> {
         let value = parse(input).map_err(|_| Error::Parse)?;
-        let ty = self.get_type(&value).map_err(Error::Infer)?;
-        let evaluated = eval(&mut self.eval, &value).map_err(Error::Eval)?;
+        let expanded = self.expander.expand(&value).map_err(|_e| Error::Parse)?;
+        let ty = self.get_type(&expanded).map_err(Error::Infer)?;
+        let evaluated = eval(&mut self.eval, &expanded).map_err(Error::Eval)?;
         Ok(The {
             ty,
             value: evaluated.to_string(),

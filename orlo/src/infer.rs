@@ -307,6 +307,7 @@ impl Env {
             Value::PrimitiveFunc(_) => unreachable!("will never reach"),
             Value::Array(vals) => self.infer_array(level, vals),
             Value::List(vals) => match &vals[..] {
+                [] => Ok(Type::ListNil),
                 [Value::Atom(atom), val] if atom == QUOTE => match val {
                     Value::Atom(_) => Ok(Type::Const(SYMBOL.to_owned())),
                     Value::List(vals) => {
@@ -404,6 +405,17 @@ impl Env {
                     self.generalize(level, &var_ty)?;
                     self.vars.insert(var.clone(), var_ty.clone());
                     Ok(var_ty)
+                }
+                [
+                    Value::Atom(atom),
+                    Value::Atom(name),
+                    Value::List(_params),
+                    _body,
+                ] if atom == "define-macro" => {
+                    // Is that right?
+                    let ty = Type::Const(SYMBOL.to_owned());
+                    self.vars.insert(name.clone(), ty.clone());
+                    Ok(ty)
                 }
                 [Value::Atom(atom), Value::List(name_args), body @ ..] if atom == "define" => {
                     let func_name = match name_args.first() {
@@ -660,10 +672,6 @@ impl Env {
                     }
                     Ok(ret)
                 }
-                _ => Err(Error::BadSpecialForm(
-                    "unrecognized special form".to_owned(),
-                    val.clone(),
-                )),
             },
             Value::DottedList(_values, _value) => todo!(),
             Value::Func {

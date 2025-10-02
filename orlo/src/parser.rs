@@ -252,17 +252,22 @@ fn expand_list_items(items: &[Value], depth: u64) -> Value {
         match item {
             Value::List(inner) if !inner.is_empty() => {
                 if let Value::Atom(s) = &inner[0] {
-                    if s == "unquote-splicing" && inner.len() == 2 && depth == 1 {
+                    if s == "unquote" && inner.len() == 2 && depth == 1 {
+                        // Regular unquote: just add the expression (expanded at depth 0)
+                        result.push(expand_quasi_quote_inner(&inner[1], 0));
+                        i += 1;
+                        continue;
+                    } else if s == "unquote-splicing" && inner.len() == 2 && depth == 1 {
                         // The spliced expression itself (expand at depth 0)
                         let splice_expr = expand_quasi_quote_inner(&inner[1], 0);
-                        
+
                         // Recursively process remaining items to handle multiple splices
                         let remaining_expanded = if i + 1 < items.len() {
                             expand_list_items(&items[i + 1..], depth)
                         } else {
                             Value::List(vec![Value::Atom("list".to_owned())])
                         };
-                        
+
                         // Build the result maintaining order
                         if result.is_empty() {
                             // Splicing at start: (append <expr> <remaining>)
@@ -291,7 +296,7 @@ fn expand_list_items(items: &[Value], depth: u64) -> Value {
         result.push(expand_quasi_quote_inner(item, depth));
         i += 1;
     }
-    
+
     Value::List(
         std::iter::once(Value::Atom("list".to_owned()))
             .chain(result.into_iter())
