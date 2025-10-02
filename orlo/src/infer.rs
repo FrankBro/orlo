@@ -23,6 +23,7 @@ pub enum Error {
     FunctionArgNotSymbol(String),
     IO(std::io::ErrorKind),
     Parser,
+    DefineMacroNotSymbol(Value),
     DefineFunctionNotSymbol(Value),
 }
 
@@ -406,15 +407,42 @@ impl Env {
                     self.vars.insert(var.clone(), var_ty.clone());
                     Ok(var_ty)
                 }
+                [Value::Atom(atom), body @ ..] if atom == "begin" => {
+                    let mut ret_ty = Type::Const("void".to_owned());
+                    for val in body {
+                        let body_ty = self.infer(level, val)?;
+                        ret_ty = body_ty;
+                    }
+                    Ok(ret_ty)
+                }
+                [Value::Atom(atom), Value::List(name_args), _body] if atom == "define-macro" => {
+                    let macro_name = match name_args.first() {
+                        Some(Value::Atom(name)) => name,
+                        other => {
+                            return Err(Error::DefineMacroNotSymbol(
+                                other.cloned().unwrap_or(Value::List(vec![])),
+                            ));
+                        }
+                    };
+                    let ty = Type::Const(SYMBOL.to_owned());
+                    self.vars.insert(macro_name.clone(), ty.clone());
+                    Ok(ty)
+                }
                 [
                     Value::Atom(atom),
-                    Value::Atom(name),
-                    Value::List(_params),
+                    Value::DottedList(name_args, _vararg),
                     _body,
                 ] if atom == "define-macro" => {
-                    // Is that right?
+                    let macro_name = match name_args.first() {
+                        Some(Value::Atom(name)) => name,
+                        other => {
+                            return Err(Error::DefineMacroNotSymbol(
+                                other.cloned().unwrap_or(Value::List(vec![])),
+                            ));
+                        }
+                    };
                     let ty = Type::Const(SYMBOL.to_owned());
-                    self.vars.insert(name.clone(), ty.clone());
+                    self.vars.insert(macro_name.clone(), ty.clone());
                     Ok(ty)
                 }
                 [Value::Atom(atom), Value::List(name_args), body @ ..] if atom == "define" => {

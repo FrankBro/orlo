@@ -82,12 +82,41 @@ pub fn eval(env: &mut Env, val: &Value) -> Result<Value> {
         Value::Atom(id) => env.get_var(id).cloned(),
         Value::Array(_) => Ok(val.clone()),
         Value::List(vals) => match &vals[..] {
+            [Value::Atom(atom), Value::List(name_args), _body] if atom == "define-macro" => {
+                let macro_name = match name_args.first() {
+                    Some(Value::Atom(name)) => name,
+                    _ => {
+                        return Err(Error::BadSpecialForm(
+                            "unrecognized special form".to_owned(),
+                            val.clone(),
+                        ));
+                    }
+                };
+                Ok(Value::Atom(macro_name.to_owned()))
+            }
             [
                 Value::Atom(atom),
-                Value::Atom(name),
-                Value::List(_params),
+                Value::DottedList(name_args, _vararg),
                 _body,
-            ] if atom == "define-macro" => Ok(Value::Atom(name.to_owned())),
+            ] if atom == "define-macro" => {
+                let macro_name = match name_args.first() {
+                    Some(Value::Atom(name)) => name,
+                    _ => {
+                        return Err(Error::BadSpecialForm(
+                            "unrecognized special form".to_owned(),
+                            val.clone(),
+                        ));
+                    }
+                };
+                Ok(Value::Atom(macro_name.to_owned()))
+            }
+            [Value::Atom(atom), body @ ..] if atom == "begin" => {
+                let mut ret = None;
+                for expr in body {
+                    ret = Some(eval(env, expr)?);
+                }
+                ret.ok_or(Error::EmptyBody)
+            }
             [Value::Atom(atom), val] if atom == QUOTE => Ok(val.clone()),
             [Value::Atom(atom), body @ ..] if atom == "append" => {
                 let mut result = Vec::new();
