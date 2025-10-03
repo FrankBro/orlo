@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::{env::Env, eval::eval, value::Value};
+use crate::{env::Env, error, eval::eval, value::Value};
 
 #[derive(Debug, Clone)]
 pub struct Expander {
@@ -14,6 +14,21 @@ struct Macro {
     body: Value,
 }
 
+#[derive(Debug)]
+pub enum Error {
+    MacroDefinitionEmpty,
+    MacroNameNotSymbol(Value),
+    MacroParamNotSymbol(Value),
+    MacroTooFewArguments {
+        name: String,
+        minimum: usize,
+        got: usize,
+    },
+    MacroExpansion(error::Error),
+}
+
+type Result<T, E = Error> = std::result::Result<T, E>;
+
 impl Expander {
     pub fn new() -> Self {
         Self {
@@ -21,109 +36,85 @@ impl Expander {
         }
     }
 
-    pub fn define_macro(
+    fn define_macro(
         &mut self,
-        name: String,
-        params: Vec<String>,
-        vararg: Option<String>,
-        body: Value,
-    ) {
+        param_values: &Vec<Value>,
+        vararg_value: Option<&Value>,
+        body: &Value,
+    ) -> Result<()> {
+        let (macro_name, param_values) = match &param_values[..] {
+            [Value::Atom(name), params @ ..] => (name.clone(), params),
+            [] => return Err(Error::MacroDefinitionEmpty),
+            [value, ..] => return Err(Error::MacroNameNotSymbol(value.clone())),
+        };
+        let mut params: Vec<String> = Vec::with_capacity(param_values.len());
+        for param_value in param_values {
+            if let Value::Atom(s) = param_value {
+                params.push(s.clone());
+            } else {
+                return Err(Error::MacroParamNotSymbol(param_value.clone()));
+            }
+        }
+        let vararg = match vararg_value {
+            Some(Value::Atom(s)) => Some(s.clone()),
+            Some(value) => return Err(Error::MacroParamNotSymbol(value.clone())),
+            None => None,
+        };
+        let body = body.clone();
         self.macros.insert(
-            name,
+            macro_name,
             Macro {
                 params,
                 vararg,
                 body,
             },
         );
+        Ok(())
     }
 
     // Also register macros
-    pub fn expand(&mut self, expr: &Value) -> Result<Value, String> {
+    pub fn expand(&mut self, expr: &Value) -> Result<Value> {
         match expr {
             Value::List(vals) => match &vals[..] {
                 [Value::Atom(atom), Value::List(params), body] if atom == "define-macro" => {
-                    let (macro_name, params) = match &params[..] {
-                        [Value::Atom(name), params @ ..] => (name.clone(), params),
-                        _ => {
-                            return Err("Invalid macro definition".to_string());
-                        }
-                    };
-                    let mut param_names: Vec<String> = Vec::with_capacity(params.len());
-                    for param in params {
-                        if let Value::Atom(s) = param {
-                            param_names.push(s.clone());
-                        } else {
-                            return Err("Invalid parameter in macro definition".to_string());
-                        }
-                    }
-                    self.define_macro(macro_name.clone(), param_names, None, body.clone());
-                    // Return the macro definition as-is for the evaluator to handle
+                    self.define_macro(params, None, body)?;
                     return Ok(expr.clone());
                 }
                 [Value::Atom(atom), Value::DottedList(params, vararg), body]
                     if atom == "define-macro" =>
                 {
-                    let (macro_name, params) = match &params[..] {
-                        [Value::Atom(name), params @ ..] => (name.clone(), params),
-                        _ => {
-                            return Err("Invalid macro definition".to_string());
-                        }
-                    };
-                    let mut param_names: Vec<String> = Vec::with_capacity(params.len());
-                    for param in params {
-                        if let Value::Atom(s) = param {
-                            param_names.push(s.clone());
-                        } else {
-                            return Err("Invalid parameter in macro definition".to_string());
-                        }
-                    }
-                    let vararg = match &**vararg {
-                        Value::Atom(s) => Some(s.clone()),
-                        _ => {
-                            return Err("Invalid vararg in macro definition".to_string());
-                        }
-                    };
-                    self.define_macro(macro_name.clone(), param_names, vararg, body.clone());
-                    // Return the macro definition as-is for the evaluator to handle
+                    let vararg = Some(vararg.as_ref());
+                    self.define_macro(params, vararg, body)?;
                     return Ok(expr.clone());
                 }
                 [Value::Atom(name), args @ ..] if self.macros.contains_key(name) => {
                     let macro_def = self.macros.get(name).expect("Macro should exist");
-                    // Apply the macro
+
                     if args.len() < macro_def.params.len() {
-                        return Err(format!(
-                            "Macro {} expects at least {} arguments, got {}",
-                            name,
-                            macro_def.params.len(),
-                            args.len()
-                        ));
+                        return Err(Error::MacroTooFewArguments {
+                            name: name.to_owned(),
+                            minimum: macro_def.params.len(),
+                            got: args.len(),
+                        });
                     }
 
-                    // Create an environment with parameter bindings
                     let mut env = Env::default();
-                    let (args, vararg) = if macro_def.vararg.is_some() {
-                        let (fixed_args, vararg_vals) = args.split_at(macro_def.params.len());
-                        (fixed_args.to_vec(), Some(Value::List(vararg_vals.to_vec())))
-                    } else {
-                        (args.to_vec(), None)
+                    let args = match macro_def.vararg.as_ref() {
+                        Some(name) => {
+                            let (fixed_args, vararg_vals) = args.split_at(macro_def.params.len());
+                            let vararg_vals = Value::List(vararg_vals.to_vec());
+                            env.define_var(name.to_owned(), vararg_vals);
+                            fixed_args
+                        }
+                        None => args,
                     };
                     for (param, arg) in macro_def.params.iter().zip(args.iter()) {
                         env.define_var(param.clone(), arg.clone());
                     }
-                    match (vararg, macro_def.vararg.as_ref()) {
-                        (Some(vararg_val), Some(vararg_name)) => {
-                            env.define_var(vararg_name.clone(), vararg_val);
-                        }
-                        (None, None) => {}
-                        (_, _) => {
-                            return Err("Macro vararg mismatch".to_string());
-                        }
-                    }
 
                     // Evaluate the macro body to get the expansion
-                    let expanded = eval(&mut env, &macro_def.body)
-                        .map_err(|e| format!("Macro expansion error: {:?}", e))?;
+                    let expanded =
+                        eval(&mut env, &macro_def.body).map_err(Error::MacroExpansion)?;
 
                     // Recursively expand the result
                     return self.expand(&expanded);
