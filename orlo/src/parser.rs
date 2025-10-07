@@ -18,6 +18,8 @@ pub enum Token<'a> {
     String(&'a str),
     #[regex(r#"([a-z]|(?&symbol))([a-z0-9]|(?&symbol))*"#)]
     Atom(&'a str),
+    #[regex(r#"\.([a-z]|(?&symbol))([a-z0-9]|(?&symbol))*"#)]
+    Label(&'a str),
     #[regex(r#"[0-9]+"#, |lex| lex.slice().parse::<i64>().unwrap())]
     Number(i64),
     #[token("'")]
@@ -42,6 +44,10 @@ pub enum Token<'a> {
     Unquote,
     #[token(",@")]
     UnquoteSplicing,
+    #[token("{")]
+    LCurly,
+    #[token("}")]
+    RCurly,
 }
 
 fn parser<'tokens, 'src: 'tokens, I>()
@@ -99,6 +105,16 @@ where
             .delimited_by(just(Token::LBracket), just(Token::RBracket))
             .map(Value::Array)
             .labelled("array");
+        let long_label = select! { Token::Label(s) => s[1..].to_string() }.then(sexpr.clone());
+        let short_label = select! { Token::Atom(s) => s.to_string() }
+            .map(|symbol| (symbol.clone(), Value::Atom(symbol)));
+        let label = long_label.or(short_label).labelled("label");
+        let record = label
+            .repeated()
+            .collect::<Vec<_>>()
+            .delimited_by(just(Token::LCurly), just(Token::RCurly))
+            .map(|fields| Value::Record(fields))
+            .labelled("record");
         bool.or(atom)
             .or(string)
             .or(number)
@@ -108,6 +124,7 @@ where
             .or(unquote_splicing)
             .or(list)
             .or(array)
+            .or(record)
     })
 }
 

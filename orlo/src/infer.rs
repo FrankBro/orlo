@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use crate::{
     parser::parse_multiple,
-    typing::{Id, Level, Type, TypeVar, replace_ty_constants_with_vars},
+    typing::{Constraints, Id, Level, Type, TypeVar, replace_ty_constants_with_vars},
     value::{IOFunc, PrimitiveFunc, QUOTE, Value},
 };
 
@@ -25,6 +25,11 @@ pub enum Error {
     Parser,
     DefineMacroNotSymbol(Value),
     DefineFunctionNotSymbol(Value),
+    MissingLabel(String),
+    CannotInjectConstraintsInto(Type),
+    ExpectedARow(Type),
+    RowConstraintFailed(String),
+    RecursiveRowType,
 }
 
 type Result<T> = std::result::Result<T, Error>;
@@ -48,6 +53,12 @@ impl Env {
         Type::Var(id)
     }
 
+    fn new_unbound_row_tvar(&mut self, level: Level, constraints: Constraints) -> Type {
+        let id = self.tvars.len();
+        self.tvars.push(TypeVar::UnboundRow(level, constraints));
+        Type::Var(id)
+    }
+
     fn new_weak_tvar(&mut self, level: Level) -> Type {
         let id = self.tvars.len();
         self.tvars.push(TypeVar::Weak(level));
@@ -57,6 +68,13 @@ impl Env {
     fn new_generic_tvar(&mut self) -> Type {
         let id = self.tvars.len();
         self.tvars.push(TypeVar::Generic);
+        Type::Var(id)
+    }
+
+    #[allow(dead_code)]
+    fn new_generic_row_tvar(&mut self, constraints: Constraints) -> Type {
+        let id = self.tvars.len();
+        self.tvars.push(TypeVar::GenericRow(constraints));
         Type::Var(id)
     }
 
@@ -102,13 +120,23 @@ impl Env {
                 let other_tvar = self.get_mut_tvar(*other_id)?;
                 match other_tvar.clone() {
                     TypeVar::Link(ty) => self.occurs_check_adjust_levels(tvar_id, tvar_level, &ty),
-                    TypeVar::Generic => panic!(),
+                    TypeVar::Generic | TypeVar::GenericRow(_) => panic!(),
                     TypeVar::Unbound(other_level) => {
                         if *other_id == tvar_id {
                             Err(Error::RecursiveType)
                         } else {
                             if other_level > tvar_level {
                                 *other_tvar = TypeVar::Unbound(tvar_level);
+                            }
+                            Ok(())
+                        }
+                    }
+                    TypeVar::UnboundRow(other_level, constraints) => {
+                        if *other_id == tvar_id {
+                            Err(Error::RecursiveType)
+                        } else {
+                            if other_level > tvar_level {
+                                *other_tvar = TypeVar::UnboundRow(tvar_level, constraints);
                             }
                             Ok(())
                         }
@@ -143,7 +171,71 @@ impl Env {
                 self.occurs_check_adjust_levels(tvar_id, tvar_level, vararg)
             }
             Type::Array(ty) => self.occurs_check_adjust_levels(tvar_id, tvar_level, ty),
-            Type::Const(_) | Type::ListNil => Ok(()),
+            Type::Record(row) => self.occurs_check_adjust_levels(tvar_id, tvar_level, row),
+            Type::RowExtend(labels, rest) => {
+                for (_label, ty) in labels {
+                    self.occurs_check_adjust_levels(tvar_id, tvar_level, ty)?;
+                }
+                self.occurs_check_adjust_levels(tvar_id, tvar_level, rest)
+            }
+            Type::Const(_) | Type::ListNil | Type::RowEmpty => Ok(()),
+        }
+    }
+
+    fn match_row_ty(&self, ty: &Type) -> Result<(Vec<(String, Type)>, Type)> {
+        match ty {
+            Type::RowExtend(labels, rest) => {
+                let mut labels = labels.clone();
+                let (mut rest_labels, rest) = self.match_row_ty(&rest)?;
+                labels.append(&mut rest_labels);
+                Ok((labels, rest))
+            }
+            Type::Var(id) => {
+                let tvar = self.get_tvar(*id)?;
+                match tvar {
+                    TypeVar::Link(ty) => self.match_row_ty(ty),
+                    _ => Ok((vec![], ty.clone())),
+                }
+            }
+            Type::RowEmpty => Ok((vec![], Type::RowEmpty)),
+            _ => Err(Error::ExpectedARow(ty.clone())),
+        }
+    }
+
+    fn inject_constraints(&mut self, constraints: Constraints, ty: &Type) -> Result<()> {
+        match ty {
+            Type::Var(id) => {
+                let tvar = self.get_mut_tvar(*id)?;
+                match tvar.clone() {
+                    TypeVar::Link(ty) => self.inject_constraints(constraints, &ty),
+                    TypeVar::UnboundRow(level, other_constraints) => {
+                        let constraints = constraints.union(other_constraints);
+                        *tvar = TypeVar::UnboundRow(level, constraints);
+                        Ok(())
+                    }
+                    TypeVar::GenericRow(other_constraints) => {
+                        let constraints = constraints.union(other_constraints);
+                        *tvar = TypeVar::GenericRow(constraints);
+                        Ok(())
+                    }
+                    TypeVar::Unbound(_) | TypeVar::Generic | TypeVar::Weak(_) => {
+                        Err(Error::CannotInjectConstraintsInto(ty.clone()))
+                    }
+                }
+            }
+            Type::Record(row) => self.inject_constraints(constraints, row),
+            Type::RowEmpty => Ok(()),
+            Type::RowExtend(_, _) => {
+                let (labels, rest) = self.match_row_ty(ty)?;
+                for (label, _) in labels {
+                    if !constraints.contains(&label) {
+                        return Err(Error::RowConstraintFailed(label.clone()));
+                    }
+                }
+                self.inject_constraints(constraints, &rest)?;
+                Ok(())
+            }
+            _ => Err(Error::CannotInjectConstraintsInto(ty.clone())),
         }
     }
 
@@ -179,12 +271,18 @@ impl Env {
                         self.occurs_check_adjust_levels(*id, level, ty2)?;
                         self.link(*id, ty2.clone())
                     }
+                    TypeVar::UnboundRow(level, constraints) => {
+                        self.inject_constraints(constraints, ty2)?;
+                        self.occurs_check_adjust_levels(*id, level, ty2)?;
+                        self.link(*id, ty1.clone())
+                    }
                     TypeVar::Weak(level) => {
                         self.occurs_check_adjust_levels(*id, level, ty2)?;
                         self.link(*id, ty2.clone())
                     }
                     TypeVar::Link(ty1) => self.unify(&ty1, ty2),
                     TypeVar::Generic => Err(Error::CannotUnify(ty1.clone(), ty2.clone())),
+                    TypeVar::GenericRow(_) => Err(Error::CannotUnify(ty1.clone(), ty2.clone())),
                 }
             }
             (_, Type::Var(id)) => {
@@ -194,12 +292,18 @@ impl Env {
                         self.occurs_check_adjust_levels(*id, level, ty1)?;
                         self.link(*id, ty1.clone())
                     }
+                    TypeVar::UnboundRow(level, constraints) => {
+                        self.inject_constraints(constraints, ty1)?;
+                        self.occurs_check_adjust_levels(*id, level, ty1)?;
+                        self.link(*id, ty1.clone())
+                    }
                     TypeVar::Weak(level) => {
                         self.occurs_check_adjust_levels(*id, level, ty1)?;
                         self.link(*id, ty1.clone())
                     }
                     TypeVar::Link(ty2) => self.unify(ty1, &ty2),
                     TypeVar::Generic => Err(Error::CannotUnify(ty1.clone(), ty2.clone())),
+                    TypeVar::GenericRow(_) => Err(Error::CannotUnify(ty1.clone(), ty2.clone())),
                 }
             }
             (Type::ListNil, Type::ListNil)
@@ -220,7 +324,74 @@ impl Env {
             (Type::ListVarArg(vararg), ty) | (ty, Type::ListVarArg(vararg)) => {
                 self.unify(vararg, ty)
             }
+            (Type::Record(row1), Type::Record(row2)) => self.unify(row1, row2),
+            (Type::RowEmpty, Type::RowEmpty) => Ok(()),
+            (Type::RowExtend(_, _), Type::RowExtend(_, _)) => self.unify_rows(ty1, ty2),
+            (Type::RowExtend(labels, _), Type::RowEmpty)
+            | (Type::RowEmpty, Type::RowExtend(labels, _)) => Err(Error::MissingLabel(
+                labels.first().map(|(label, _)| label.clone()).unwrap(),
+            )),
             _ => Err(Error::CannotUnify(ty1.clone(), ty2.clone())),
+        }
+    }
+
+    fn find_missing(
+        &mut self,
+        labels1: &Vec<(String, Type)>,
+        labels2: &Vec<(String, Type)>,
+    ) -> Result<Vec<(String, Type)>> {
+        let mut missing = Vec::new();
+        for (label1, ty1) in labels1 {
+            if let Some((_, ty2)) = labels2.iter().find(|(label2, _)| label1 == label2) {
+                self.unify(ty1, ty2)?;
+            } else {
+                missing.push((label1.clone(), ty1.clone()));
+            }
+        }
+        Ok(missing)
+    }
+
+    fn unify_rows(&mut self, row1: &Type, row2: &Type) -> Result<()> {
+        let (labels1, rest1) = self.match_row_ty(row1)?;
+        let (labels2, rest2) = self.match_row_ty(row2)?;
+
+        let missing1 = self.find_missing(&labels2, &labels1)?;
+        let missing2 = self.find_missing(&labels1, &labels2)?;
+
+        match (missing1.is_empty(), missing2.is_empty()) {
+            (true, true) => self.unify(&rest1, &rest2),
+            (true, false) => self.unify(&rest2, &Type::RowExtend(missing2, rest1.into())),
+            (false, true) => self.unify(&rest1, &Type::RowExtend(missing1, rest2.into())),
+            (false, false) => match rest1 {
+                Type::RowEmpty => {
+                    // TODO: not row? also, level 0?
+                    let tvar = self.new_unbound_tvar(0);
+                    self.unify(&rest1, &Type::RowExtend(missing1, tvar.into()))
+                }
+                Type::Var(id) => {
+                    let tvar = self.get_tvar(id)?;
+                    match tvar.clone() {
+                        TypeVar::Unbound(level) => {
+                            let rest = self.new_unbound_row_tvar(level, Constraints::default());
+                            self.unify(&rest2, &Type::RowExtend(missing2, rest.clone().into()))?;
+                            if let TypeVar::Link(_) = self.get_tvar(id)? {
+                                return Err(Error::RecursiveRowType);
+                            }
+                            self.unify(&rest1, &Type::RowExtend(missing1, rest.into()))
+                        }
+                        TypeVar::UnboundRow(level, constraints) => {
+                            let rest = self.new_unbound_row_tvar(level, constraints);
+                            self.unify(&rest2, &Type::RowExtend(missing2, rest.clone().into()))?;
+                            if let TypeVar::Link(_) = self.get_tvar(id)? {
+                                return Err(Error::RecursiveRowType);
+                            }
+                            self.unify(&rest1, &Type::RowExtend(missing1, rest.into()))
+                        }
+                        _ => unreachable!(),
+                    }
+                }
+                _ => unreachable!(),
+            },
         }
     }
 
@@ -296,6 +467,26 @@ impl Env {
         Ok(Type::Array(Box::new(ty)))
     }
 
+    fn infer_record(
+        &mut self,
+        level: Level,
+        labels: &Vec<(String, Value)>,
+        rest: Option<&Value>,
+    ) -> Result<Type> {
+        let rest = match rest {
+            Some(_rest) => todo!(),
+            None => Type::RowEmpty.into(),
+        };
+        let mut label_tys = Vec::with_capacity(labels.len());
+        for (label, val) in labels {
+            let val_ty = self.infer(level, val)?;
+            label_tys.push((label.clone(), val_ty));
+        }
+        Ok(Type::Record(
+            Type::RowExtend(label_tys, Box::new(rest)).into(),
+        ))
+    }
+
     fn infer(&mut self, level: Level, val: &Value) -> Result<Type> {
         match val {
             Value::Atom(name) => {
@@ -307,6 +498,7 @@ impl Env {
             Value::Bool(_) => Ok(Type::Const(BOOL.to_owned())),
             Value::PrimitiveFunc(_) => unreachable!("will never reach"),
             Value::Array(vals) => self.infer_array(level, vals),
+            Value::Record(vals) => self.infer_record(level, vals, None),
             Value::List(vals) => match &vals[..] {
                 [] => Ok(Type::ListNil),
                 [Value::Atom(atom), val] if atom == QUOTE => match val {
@@ -327,6 +519,7 @@ impl Env {
                         }
                         Ok(ty)
                     }
+                    Value::Record(vals) => self.infer_record(level, vals, None),
                     Value::Array(vals) => self.infer_array(level, vals),
                     Value::Number(_) => Ok(Type::Const(INT.to_owned())),
                     Value::String(_) => Ok(Type::Const("string".to_owned())),
@@ -722,10 +915,16 @@ impl Env {
                         *tvar = TypeVar::Generic;
                         Ok(())
                     }
+                    TypeVar::UnboundRow(other_level, constraints) if other_level > level => {
+                        *tvar = TypeVar::GenericRow(constraints);
+                        Ok(())
+                    }
                     TypeVar::Unbound(_) => Ok(()),
+                    TypeVar::UnboundRow(_, _) => Ok(()),
                     TypeVar::Weak(_) => Ok(()),
                     TypeVar::Link(ty) => self.generalize(level, &ty),
                     TypeVar::Generic => Ok(()),
+                    TypeVar::GenericRow(_) => Ok(()),
                 }
             }
             Type::App(ty, args) => {
@@ -744,7 +943,14 @@ impl Env {
             }
             Type::ListVarArg(vararg) => self.generalize(level, vararg),
             Type::Array(ty) => self.generalize(level, ty),
-            Type::Const(_) | Type::ListNil => Ok(()),
+            Type::Record(row) => self.generalize(level, row),
+            Type::RowExtend(labels, rest) => {
+                for (_, ty) in labels {
+                    self.generalize(level, ty)?;
+                }
+                self.generalize(level, rest)
+            }
+            Type::Const(_) | Type::ListNil | Type::RowEmpty => Ok(()),
         }
     }
 
@@ -765,12 +971,19 @@ impl Env {
                 let tvar = self.get_tvar(id)?;
                 match tvar.clone() {
                     TypeVar::Unbound(_) => Ok(ty),
+                    TypeVar::UnboundRow(_, _) => Ok(ty),
                     TypeVar::Weak(_) => Ok(ty),
                     TypeVar::Link(ty) => self.instantiate_impl(id_vars, level, ty),
                     TypeVar::Generic => {
                         let ty = id_vars
                             .entry(id)
                             .or_insert_with(|| self.new_unbound_tvar(level));
+                        Ok(ty.clone())
+                    }
+                    TypeVar::GenericRow(constraints) => {
+                        let ty = id_vars
+                            .entry(id)
+                            .or_insert_with(|| self.new_unbound_row_tvar(level, constraints));
                         Ok(ty.clone())
                     }
                 }
@@ -803,6 +1016,19 @@ impl Env {
                 let ty = self.instantiate_impl(id_vars, level, *ty)?;
                 Ok(Type::Array(Box::new(ty)))
             }
+            Type::Record(row) => Ok(Type::Record(
+                self.instantiate_impl(id_vars, level, *row)?.into(),
+            )),
+            Type::RowEmpty => Ok(Type::RowEmpty),
+            Type::RowExtend(labels, rest) => {
+                let mut new_labels = Vec::with_capacity(labels.len());
+                for (label, ty) in labels {
+                    let ty = self.instantiate_impl(id_vars, level, ty)?;
+                    new_labels.push((label, ty));
+                }
+                let rest = self.instantiate_impl(id_vars, level, *rest)?;
+                Ok(Type::RowExtend(new_labels, Box::new(rest)))
+            }
         }
     }
 
@@ -825,7 +1051,9 @@ impl Env {
                         Ok((params, ret))
                     }
                     TypeVar::Link(ty) => self.match_fun_ty(num_params, ty),
-                    TypeVar::Generic => Err(Error::ExpectedAFunction(ty)),
+                    TypeVar::UnboundRow(_, _) | TypeVar::GenericRow(_) | TypeVar::Generic => {
+                        Err(Error::ExpectedAFunction(ty))
+                    }
                 }
             }
             _ => Err(Error::ExpectedAFunction(ty)),
@@ -904,7 +1132,11 @@ impl Env {
                 let tvar = self.get_tvar(*id)?;
                 match tvar {
                     TypeVar::Link(ty) => self.ty_to_string_impl(namer, ty),
-                    TypeVar::Generic | TypeVar::Unbound(_) | TypeVar::Weak(_) => {
+                    TypeVar::Generic
+                    | TypeVar::Unbound(_)
+                    | TypeVar::Weak(_)
+                    | TypeVar::UnboundRow(_, _)
+                    | TypeVar::GenericRow(_) => {
                         let name = namer.get_or_insert(*id, tvar);
                         Ok(name.to_string())
                     }
@@ -949,6 +1181,26 @@ impl Env {
                 }
                 ty_str.push(')');
                 Ok(ty_str)
+            }
+            Type::Record(row) => {
+                let row_str = self.ty_to_string_impl(namer, row)?;
+                Ok(format!("{{{}}}", row_str))
+            }
+            Type::RowEmpty => Ok("".to_owned()),
+            Type::RowExtend(_, _) => {
+                let (labels, rest) = self.match_row_ty(ty)?;
+                let mut output = String::new();
+                let mut sep = "";
+                for (label, ty) in labels {
+                    let ty_str = self.ty_to_string_impl(namer, &ty)?;
+                    output.push_str(&format!("{sep}.{label} {}", ty_str));
+                    sep = " ";
+                }
+                let rest = self.ty_to_string_impl(namer, &rest)?;
+                if !rest.is_empty() {
+                    output.push_str(&format!(" . {}", rest));
+                }
+                Ok(output)
             }
         }
     }
@@ -1123,18 +1375,24 @@ impl Env {
 
 struct Namers {
     unbound: Namer,
+    unbound_row: Namer,
     generic: Namer,
+    generic_row: Namer,
     weak: Namer,
 }
 
 impl Namers {
     fn new() -> Self {
         let unbound = Namer::new();
+        let unbound_row = Namer::new();
         let generic = Namer::new();
+        let generic_row = Namer::new();
         let weak = Namer::new();
         Self {
             unbound,
+            unbound_row,
             generic,
+            generic_row,
             weak,
         }
     }
@@ -1142,7 +1400,13 @@ impl Namers {
     fn get_or_insert(&mut self, id: Id, var: &TypeVar) -> String {
         match var {
             TypeVar::Unbound(_) => format!("_{}", self.unbound.get_or_insert(id)),
+            TypeVar::UnboundRow(_, _constraints) => {
+                format!("_r{}", self.unbound_row.get_or_insert(id))
+            }
             TypeVar::Generic => format!("{}", self.generic.get_or_insert(id)),
+            TypeVar::GenericRow(_constraints) => {
+                format!("r{}", self.generic_row.get_or_insert(id))
+            }
             TypeVar::Weak(_) => format!("~{}", self.weak.get_or_insert(id)),
             TypeVar::Link(_) => unreachable!("Link should be resolved before naming"),
         }

@@ -21,6 +21,10 @@ pub enum Type {
     ListNil,
     ListVarArg(Box<Type>),
     ListCons(Box<Type>, Box<Type>),
+    // Row
+    Record(Box<Type>),
+    RowEmpty,
+    RowExtend(Vec<(String, Type)>, Box<Type>),
 }
 
 impl Type {
@@ -83,14 +87,46 @@ pub fn replace_ty_constants_with_vars(env: &HashMap<String, Type>, ty: Type) -> 
             let tail = Box::new(replace_ty_constants_with_vars(env, *tail));
             Type::ListCons(head, tail)
         }
+        Type::Record(row) => Type::Record(replace_ty_constants_with_vars(env, *row).into()),
+        Type::RowEmpty => Type::RowEmpty,
+        Type::RowExtend(labels, rest) => {
+            let labels = labels
+                .into_iter()
+                .map(|(label, ty)| (label, replace_ty_constants_with_vars(env, ty)))
+                .collect();
+            let rest = Box::new(replace_ty_constants_with_vars(env, *rest));
+            Type::RowExtend(labels, rest)
+        }
+    }
+}
+
+#[derive(Default, Clone, Debug)]
+pub struct Constraints {
+    constraints: Vec<String>,
+}
+
+impl Constraints {
+    pub fn union(mut self, other: Self) -> Self {
+        for constraint in &other.constraints {
+            if !self.constraints.contains(constraint) {
+                self.constraints.push(constraint.clone());
+            }
+        }
+        self
+    }
+
+    pub fn contains(&self, constraint: &String) -> bool {
+        self.constraints.contains(constraint)
     }
 }
 
 #[derive(Clone, Debug)]
 pub enum TypeVar {
     Unbound(Level),
+    UnboundRow(Level, Constraints),
     Link(Type),
     Generic,
+    GenericRow(Constraints),
     // For things like a mutable empty array that'll be filled later
     Weak(Level),
 }

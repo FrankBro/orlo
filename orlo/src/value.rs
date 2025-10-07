@@ -54,6 +54,9 @@ pub enum Value {
     Number(i64),
     String(String),
     Bool(bool),
+    // TODO: Vec to preserve order?
+    Record(Vec<(String, Value)>),
+    // DottedRecord(Vec<(String, Value)>, Box<Value>),
     PrimitiveFunc(PrimitiveFunc),
     Func {
         params: Vec<String>,
@@ -103,6 +106,15 @@ impl Display for Value {
             }
             Value::IOFunc(_) => write!(f, "<IO primitive>"),
             Value::Port(_) => write!(f, "<IO port>"),
+            Value::Record(pairs) => {
+                write!(f, "{{")?;
+                let mut sep = "";
+                for (key, value) in pairs {
+                    write!(f, "{sep}.{key} {value}")?;
+                    sep = " ";
+                }
+                write!(f, "}}")
+            }
         }
     }
 }

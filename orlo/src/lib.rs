@@ -2,6 +2,7 @@ pub mod env;
 pub mod error;
 pub mod eval;
 pub mod expander;
+// pub mod identifier;
 pub mod infer;
 pub mod parser;
 pub mod primitive;
@@ -37,3 +38,7 @@ mod quasiquote_tests;
 #[cfg(test)]
 #[path = "tests/macro_tests.rs"]
 mod macro_tests;
+
+#[cfg(test)]
+#[path = "tests/record_tests.rs"]
+mod record_tests;
