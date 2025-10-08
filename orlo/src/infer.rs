@@ -30,6 +30,7 @@ pub enum Error {
     ExpectedARow(Type),
     RowConstraintFailed(String),
     RecursiveRowType,
+    NoSuchField(String, Value),
 }
 
 type Result<T> = std::result::Result<T, Error>;
@@ -501,6 +502,35 @@ impl Env {
             Value::Record(vals) => self.infer_record(level, vals, None),
             Value::List(vals) => match &vals[..] {
                 [] => Ok(Type::ListNil),
+                [Value::Atom(atom), container, Value::List(accesses)] if atom == "access" => {
+                    let mut ty = self.infer(level, container)?;
+                    for access in accesses {
+                        // TODO: Will need to handle type variables, probably unify with either rec or arr
+                        match (ty, access) {
+                            (Type::Record(row), Value::Atom(label)) => {
+                                let (labels, _) = self.match_row_ty(&row)?;
+                                if let Some((_, field_ty)) =
+                                    labels.into_iter().find(|(l, _)| l == label)
+                                {
+                                    ty = field_ty;
+                                } else {
+                                    return Err(Error::NoSuchField(label.clone(), val.clone()));
+                                }
+                            }
+                            (Type::Array(inner), Value::Number(_)) => {
+                                ty = *inner;
+                            }
+                            _ => {
+                                return Err(Error::BadSpecialForm(
+                                    "access requires a record and field name or array and index"
+                                        .to_owned(),
+                                    val.clone(),
+                                ));
+                            }
+                        }
+                    }
+                    Ok(ty.clone())
+                }
                 [Value::Atom(atom), val] if atom == QUOTE => match val {
                     Value::Atom(_) => Ok(Type::Const(SYMBOL.to_owned())),
                     Value::List(vals) => {

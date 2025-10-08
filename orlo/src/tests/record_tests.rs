@@ -9,6 +9,8 @@ fn tests() {
             "{.a 1 .b \"2\"}",
             "(the {.a int .b string} {.a 1 .b \"2\"})",
         ),
+        ("(. {.a 1} a)", "(the int 1)"),
+        ("(. [{.a 1}] 0 a)", "(the int 1)"),
     ];
     let mut repl = Repl::default();
     for (input, expected) in cases {

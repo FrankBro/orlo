@@ -13,6 +13,8 @@ pub enum Error {
     IO(io::ErrorKind),
     Port(String),
     Parser,
+    NoSuchField(String, Value),
+    IndexOutOfBounds(i64, Value),
 }
 
 impl Display for Error {
@@ -34,6 +36,10 @@ impl Display for Error {
             Error::IO(e) => write!(f, "IO error: {}", e),
             Error::Port(msg) => write!(f, "Port error: {}", msg),
             Error::Parser => write!(f, "Parse error"),
+            Error::NoSuchField(field, value) => write!(f, "Field {field} not found in {value}"),
+            Error::IndexOutOfBounds(index, value) => {
+                write!(f, "Index {index} out of bound for {value}")
+            }
         }
     }
 }

@@ -83,6 +83,56 @@ pub fn eval(env: &mut Env, val: &Value) -> Result<Value> {
         Value::Array(_) => Ok(val.clone()),
         Value::Record(_) => Ok(val.clone()),
         Value::List(vals) => match &vals[..] {
+            [Value::Atom(atom), container, Value::List(accesses)] if atom == "access" => {
+                let mut value = eval(env, container)?;
+                for access in accesses {
+                    match (value, access) {
+                        (Value::Record(fields), Value::Atom(field_name)) => {
+                            match fields.iter().find(|(name, _)| name == field_name) {
+                                Some((_, field_value)) => {
+                                    value = field_value.clone();
+                                }
+                                None => {
+                                    return Err(Error::NoSuchField(
+                                        field_name.clone(),
+                                        Value::Record(fields.clone()),
+                                    ));
+                                }
+                            }
+                        }
+                        (Value::Array(elements), Value::Number(index)) => {
+                            let index = *index;
+                            if index >= 0 {
+                                let index = index as usize;
+                                if index >= elements.len() {
+                                    return Err(Error::IndexOutOfBounds(
+                                        index as i64,
+                                        Value::Array(elements.clone()),
+                                    ));
+                                }
+                                value = elements[index].clone();
+                            } else {
+                                let index = elements.len() as i64 + index;
+                                if index < 0 {
+                                    return Err(Error::IndexOutOfBounds(
+                                        index,
+                                        Value::Array(elements.clone()),
+                                    ));
+                                }
+                                value = elements[index as usize].clone();
+                            }
+                        }
+                        (_, _) => {
+                            return Err(Error::BadSpecialForm(
+                                "access only works on record + field name or array + index"
+                                    .to_owned(),
+                                val.clone(),
+                            ));
+                        }
+                    }
+                }
+                Ok(value)
+            }
             [Value::Atom(atom), Value::List(name_args), _body] if atom == "define-macro" => {
                 let macro_name = match name_args.first() {
                     Some(Value::Atom(name)) => name,

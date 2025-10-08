@@ -20,7 +20,7 @@ pub enum Token<'a> {
     Atom(&'a str),
     #[regex(r#"\.([a-z]|(?&symbol))([a-z0-9]|(?&symbol))*"#)]
     Label(&'a str),
-    #[regex(r#"[0-9]+"#, |lex| lex.slice().parse::<i64>().unwrap())]
+    #[regex(r#"-?[0-9]+"#, |lex| lex.slice().parse::<i64>().unwrap(), priority = 3)]
     Number(i64),
     #[token("'")]
     Quote,
@@ -80,6 +80,19 @@ where
             .ignore_then(sexpr.clone())
             .map(|v| Value::List(vec![Value::Atom("unquote-splicing".to_string()), v]))
             .labelled("unquote-splicing expression");
+        let access = just(Token::Dot)
+            .ignore_then(sexpr.clone())
+            .map(|test| test)
+            .then(sexpr.clone().repeated().at_least(1).collect::<Vec<_>>())
+            .map(|(container, accesses)| {
+                Value::List(vec![
+                    Value::Atom("access".to_string()),
+                    container,
+                    Value::List(accesses),
+                ])
+            })
+            .labelled("access")
+            .delimited_by(just(Token::LParen), just(Token::RParen));
         let list = sexpr
             .clone()
             .repeated()
@@ -125,6 +138,7 @@ where
             .or(list)
             .or(array)
             .or(record)
+            .or(access)
     })
 }
 
