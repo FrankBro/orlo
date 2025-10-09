@@ -514,26 +514,33 @@ impl Env {
                 [Value::Atom(atom), container, Value::List(accesses)] if atom == "access" => {
                     let mut ty = self.infer(level, container)?;
                     for access in accesses {
-                        // TODO: Will need to handle type variables, probably unify with either rec or arr
-                        // TODO: Actually, this should create unbound type vars and then unify
-                        match (ty, access) {
-                            (Type::Record(row), Value::Atom(label)) => {
-                                let (labels, _) = self.match_row_ty(&row)?;
-                                if let Some((_, field_ty)) =
-                                    labels.into_iter().find(|(l, _)| l == label)
-                                {
-                                    ty = field_ty;
-                                } else {
-                                    return Err(Error::NoSuchField(label.clone(), val.clone()));
-                                }
+                        match access {
+                            Value::Atom(label) => {
+                                let rest = self
+                                    .new_unbound_row_tvar(level, Constraints::from_label(label));
+                                let value = self.new_unbound_tvar(level);
+                                let rec = Type::Record(
+                                    Type::RowExtend(
+                                        vec![(label.clone(), value.clone())],
+                                        Box::new(rest),
+                                    )
+                                    .into(),
+                                );
+                                self.unify(&rec, &ty)?;
+                                ty = value;
                             }
-                            (Type::Array(inner), Value::Number(_)) => {
-                                ty = *inner;
+                            Value::Number(_) => {
+                                let value = self.new_unbound_tvar(level);
+                                let arr = Type::Array(Box::new(value.clone()));
+                                self.unify(&arr, &ty)?;
+                                ty = value;
                             }
-                            _ => {
+                            ty => {
                                 return Err(Error::BadSpecialForm(
-                                    "access requires a record and field name or array and index"
-                                        .to_owned(),
+                                    format!(
+                                        "access requires a record and field name or array and index, got {:?}",
+                                        ty
+                                    ),
                                     val.clone(),
                                 ));
                             }

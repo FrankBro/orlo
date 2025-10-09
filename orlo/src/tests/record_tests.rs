@@ -13,6 +13,10 @@ fn tests() {
         ("(. [{.a 1}] 0 a)", "(the int 1)"),
         ("(define rec {})", "(the {} {})"),
         ("{ .a 1 . rec }", "(the {.a int} {.a 1})"),
+        (
+            "(define (get-a rec) (. rec a))",
+            "(the (lambda ({.a a . ra}) a) (lambda (rec) ...))",
+        ),
     ];
     let mut repl = Repl::default();
     for (input, expected) in cases {

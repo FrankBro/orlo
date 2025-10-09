@@ -118,6 +118,12 @@ impl Constraints {
     pub fn contains(&self, constraint: &String) -> bool {
         self.constraints.contains(constraint)
     }
+
+    pub fn from_label(label: &str) -> Self {
+        Constraints {
+            constraints: vec![label.to_string()],
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
