@@ -475,8 +475,16 @@ impl Env {
         rest: Option<&Value>,
     ) -> Result<Type> {
         let rest = match rest {
-            Some(_rest) => todo!(),
-            None => Type::RowEmpty.into(),
+            Some(rest) => match self.infer(level, rest)? {
+                Type::Record(row) => *row,
+                ty => {
+                    return Err(Error::BadSpecialForm(
+                        format!("rest of dotted record must be a record: {:?}", ty),
+                        rest.clone(),
+                    ));
+                }
+            },
+            None => Type::RowEmpty,
         };
         let mut label_tys = Vec::with_capacity(labels.len());
         for (label, val) in labels {
@@ -500,12 +508,14 @@ impl Env {
             Value::PrimitiveFunc(_) => unreachable!("will never reach"),
             Value::Array(vals) => self.infer_array(level, vals),
             Value::Record(vals) => self.infer_record(level, vals, None),
+            Value::DottedRecord(vals, rest) => self.infer_record(level, vals, Some(rest)),
             Value::List(vals) => match &vals[..] {
                 [] => Ok(Type::ListNil),
                 [Value::Atom(atom), container, Value::List(accesses)] if atom == "access" => {
                     let mut ty = self.infer(level, container)?;
                     for access in accesses {
                         // TODO: Will need to handle type variables, probably unify with either rec or arr
+                        // TODO: Actually, this should create unbound type vars and then unify
                         match (ty, access) {
                             (Type::Record(row), Value::Atom(label)) => {
                                 let (labels, _) = self.match_row_ty(&row)?;
@@ -550,6 +560,7 @@ impl Env {
                         Ok(ty)
                     }
                     Value::Record(vals) => self.infer_record(level, vals, None),
+                    Value::DottedRecord(vals, rest) => self.infer_record(level, vals, Some(rest)),
                     Value::Array(vals) => self.infer_array(level, vals),
                     Value::Number(_) => Ok(Type::Const(INT.to_owned())),
                     Value::String(_) => Ok(Type::Const("string".to_owned())),

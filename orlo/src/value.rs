@@ -56,7 +56,7 @@ pub enum Value {
     Bool(bool),
     // TODO: Vec to preserve order?
     Record(Vec<(String, Value)>),
-    // DottedRecord(Vec<(String, Value)>, Box<Value>),
+    DottedRecord(Vec<(String, Value)>, Box<Value>),
     PrimitiveFunc(PrimitiveFunc),
     Func {
         params: Vec<String>,
@@ -114,6 +114,15 @@ impl Display for Value {
                     sep = " ";
                 }
                 write!(f, "}}")
+            }
+            Value::DottedRecord(pairs, rest) => {
+                write!(f, "{{")?;
+                let mut sep = "";
+                for (key, value) in pairs {
+                    write!(f, "{sep}.{key} {value}")?;
+                    sep = " ";
+                }
+                write!(f, ". {rest}}}")
             }
         }
     }

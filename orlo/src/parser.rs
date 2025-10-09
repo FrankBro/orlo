@@ -125,8 +125,17 @@ where
         let record = label
             .repeated()
             .collect::<Vec<_>>()
+            .then(
+                just(Token::Dot)
+                    .ignore_then(sexpr.clone())
+                    .or_not()
+                    .map(|opt| opt.map(Box::new)),
+            )
             .delimited_by(just(Token::LCurly), just(Token::RCurly))
-            .map(|fields| Value::Record(fields))
+            .map(|(fields, rest)| match rest {
+                None => Value::Record(fields),
+                Some(rest) => Value::DottedRecord(fields, rest),
+            })
             .labelled("record");
         bool.or(atom)
             .or(string)

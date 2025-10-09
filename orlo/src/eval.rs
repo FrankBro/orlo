@@ -82,6 +82,25 @@ pub fn eval(env: &mut Env, val: &Value) -> Result<Value> {
         Value::Atom(id) => env.get_var(id).cloned(),
         Value::Array(_) => Ok(val.clone()),
         Value::Record(_) => Ok(val.clone()),
+        Value::DottedRecord(vals, rest) => {
+            let mut fields = match eval(env, &rest)? {
+                Value::Record(fields) => fields.clone(),
+                _ => {
+                    return Err(Error::BadSpecialForm(
+                        "dotted record requires a record".to_string(),
+                        rest.as_ref().clone(),
+                    ));
+                }
+            };
+            for (key, value) in vals {
+                if let Some(val) = fields.iter_mut().find(|(k, _)| k == key) {
+                    *val = (key.clone(), value.clone());
+                } else {
+                    fields.push((key.clone(), value.clone()));
+                }
+            }
+            Ok(Value::Record(fields))
+        }
         Value::List(vals) => match &vals[..] {
             [Value::Atom(atom), container, Value::List(accesses)] if atom == "access" => {
                 let mut value = eval(env, container)?;
