@@ -23,6 +23,7 @@ pub enum Type {
     ListCons(Box<Type>, Box<Type>),
     // Row
     Record(Box<Type>),
+    Variant(Box<Type>),
     RowEmpty,
     RowExtend(Vec<(String, Type)>, Box<Type>),
 }
@@ -88,6 +89,7 @@ pub fn replace_ty_constants_with_vars(env: &HashMap<String, Type>, ty: Type) -> 
             Type::ListCons(head, tail)
         }
         Type::Record(row) => Type::Record(replace_ty_constants_with_vars(env, *row).into()),
+        Type::Variant(row) => Type::Variant(replace_ty_constants_with_vars(env, *row).into()),
         Type::RowEmpty => Type::RowEmpty,
         Type::RowExtend(labels, rest) => {
             let labels = labels

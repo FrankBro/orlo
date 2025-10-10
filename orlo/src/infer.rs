@@ -173,6 +173,7 @@ impl Env {
             }
             Type::Array(ty) => self.occurs_check_adjust_levels(tvar_id, tvar_level, ty),
             Type::Record(row) => self.occurs_check_adjust_levels(tvar_id, tvar_level, row),
+            Type::Variant(row) => self.occurs_check_adjust_levels(tvar_id, tvar_level, row),
             Type::RowExtend(labels, rest) => {
                 for (_label, ty) in labels {
                     self.occurs_check_adjust_levels(tvar_id, tvar_level, ty)?;
@@ -225,6 +226,7 @@ impl Env {
                 }
             }
             Type::Record(row) => self.inject_constraints(constraints, row),
+            Type::Variant(row) => self.inject_constraints(constraints, row),
             Type::RowEmpty => Ok(()),
             Type::RowExtend(_, _) => {
                 let (labels, rest) = self.match_row_ty(ty)?;
@@ -326,6 +328,7 @@ impl Env {
                 self.unify(vararg, ty)
             }
             (Type::Record(row1), Type::Record(row2)) => self.unify(row1, row2),
+            (Type::Variant(row1), Type::Variant(row2)) => self.unify(row1, row2),
             (Type::RowEmpty, Type::RowEmpty) => Ok(()),
             (Type::RowExtend(_, _), Type::RowExtend(_, _)) => self.unify_rows(ty1, ty2),
             (Type::RowExtend(labels, _), Type::RowEmpty)
@@ -496,6 +499,18 @@ impl Env {
         ))
     }
 
+    fn infer_variant(&mut self, level: Level, label: &str, val: &Value) -> Result<Type> {
+        let constraints = Constraints::from_label(label);
+        let rest = self.new_unbound_row_tvar(level, constraints);
+        let variant = self.new_unbound_tvar(level);
+        let ret = Type::Variant(
+            Type::RowExtend(vec![(label.to_owned(), variant.clone())], rest.into()).into(),
+        );
+        let val = self.infer(level, val)?;
+        self.unify(&variant, &val)?;
+        Ok(ret)
+    }
+
     fn infer(&mut self, level: Level, val: &Value) -> Result<Type> {
         match val {
             Value::Atom(name) => {
@@ -509,6 +524,7 @@ impl Env {
             Value::Array(vals) => self.infer_array(level, vals),
             Value::Record(vals) => self.infer_record(level, vals, None),
             Value::DottedRecord(vals, rest) => self.infer_record(level, vals, Some(rest)),
+            Value::Variant(label, val) => self.infer_variant(level, label, val),
             Value::List(vals) => match &vals[..] {
                 [] => Ok(Type::ListNil),
                 [Value::Atom(atom), container, Value::List(accesses)] if atom == "access" => {
@@ -568,6 +584,7 @@ impl Env {
                     }
                     Value::Record(vals) => self.infer_record(level, vals, None),
                     Value::DottedRecord(vals, rest) => self.infer_record(level, vals, Some(rest)),
+                    Value::Variant(label, val) => self.infer_variant(level, label, val),
                     Value::Array(vals) => self.infer_array(level, vals),
                     Value::Number(_) => Ok(Type::Const(INT.to_owned())),
                     Value::String(_) => Ok(Type::Const("string".to_owned())),
@@ -992,6 +1009,7 @@ impl Env {
             Type::ListVarArg(vararg) => self.generalize(level, vararg),
             Type::Array(ty) => self.generalize(level, ty),
             Type::Record(row) => self.generalize(level, row),
+            Type::Variant(row) => self.generalize(level, row),
             Type::RowExtend(labels, rest) => {
                 for (_, ty) in labels {
                     self.generalize(level, ty)?;
@@ -1065,6 +1083,9 @@ impl Env {
                 Ok(Type::Array(Box::new(ty)))
             }
             Type::Record(row) => Ok(Type::Record(
+                self.instantiate_impl(id_vars, level, *row)?.into(),
+            )),
+            Type::Variant(row) => Ok(Type::Variant(
                 self.instantiate_impl(id_vars, level, *row)?.into(),
             )),
             Type::RowEmpty => Ok(Type::RowEmpty),
@@ -1233,6 +1254,10 @@ impl Env {
             Type::Record(row) => {
                 let row_str = self.ty_to_string_impl(namer, row)?;
                 Ok(format!("{{{}}}", row_str))
+            }
+            Type::Variant(row) => {
+                let row_str = self.ty_to_string_impl(namer, row)?;
+                Ok(format!("({})", row_str))
             }
             Type::RowEmpty => Ok("".to_owned()),
             Type::RowExtend(_, _) => {

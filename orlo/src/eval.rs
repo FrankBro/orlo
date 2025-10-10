@@ -81,6 +81,7 @@ pub fn eval(env: &mut Env, val: &Value) -> Result<Value> {
         Value::Bool(_) => Ok(val.clone()),
         Value::Atom(id) => env.get_var(id).cloned(),
         Value::Array(_) => Ok(val.clone()),
+        Value::Variant(_, _) => Ok(val.clone()),
         Value::Record(_) => Ok(val.clone()),
         Value::DottedRecord(vals, rest) => {
             let mut fields = match eval(env, &rest)? {

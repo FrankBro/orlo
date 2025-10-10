@@ -42,3 +42,7 @@ mod macro_tests;
 #[cfg(test)]
 #[path = "tests/record_tests.rs"]
 mod record_tests;
+
+#[cfg(test)]
+#[path = "tests/variant_tests.rs"]
+mod variant_tests;

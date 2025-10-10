@@ -57,6 +57,7 @@ pub enum Value {
     // TODO: Vec to preserve order?
     Record(Vec<(String, Value)>),
     DottedRecord(Vec<(String, Value)>, Box<Value>),
+    Variant(String, Box<Value>),
     PrimitiveFunc(PrimitiveFunc),
     Func {
         params: Vec<String>,
@@ -123,6 +124,9 @@ impl Display for Value {
                     sep = " ";
                 }
                 write!(f, ". {rest}}}")
+            }
+            Value::Variant(label, val) => {
+                write!(f, "(.{} {})", label, val)
             }
         }
     }

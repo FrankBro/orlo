@@ -121,7 +121,7 @@ where
         let long_label = select! { Token::Label(s) => s[1..].to_string() }.then(sexpr.clone());
         let short_label = select! { Token::Atom(s) => s.to_string() }
             .map(|symbol| (symbol.clone(), Value::Atom(symbol)));
-        let label = long_label.or(short_label).labelled("label");
+        let label = long_label.clone().or(short_label).labelled("label");
         let record = label
             .repeated()
             .collect::<Vec<_>>()
@@ -137,6 +137,10 @@ where
                 Some(rest) => Value::DottedRecord(fields, rest),
             })
             .labelled("record");
+        let variant = long_label
+            .map(|(label, val)| Value::Variant(label, Box::new(val)))
+            .delimited_by(just(Token::LParen), just(Token::RParen))
+            .labelled("variant");
         bool.or(atom)
             .or(string)
             .or(number)
@@ -148,6 +152,7 @@ where
             .or(array)
             .or(record)
             .or(access)
+            .or(variant)
     })
 }
 
