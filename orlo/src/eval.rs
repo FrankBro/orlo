@@ -416,6 +416,40 @@ pub fn eval(env: &mut Env, val: &Value) -> Result<Value> {
                 env.load_closure(closure);
                 ret
             }
+            Form::Match {
+                val,
+                arms,
+                def: default,
+            } => {
+                let closure = env.make_closure();
+                let (label, val) = match eval(env, val)? {
+                    Value::Variant(label, val) => (label, val),
+                    other => {
+                        return Err(Error::TypeMismatch("variant".to_owned(), other.clone()));
+                    }
+                };
+                for (arm_label, arm_binding, arm_body) in arms {
+                    if &label == arm_label {
+                        env.define_var(arm_binding.to_owned(), *val);
+                        let mut ret = None;
+                        for expr in arm_body {
+                            ret = Some(eval(env, expr)?);
+                        }
+                        env.load_closure(closure);
+                        return ret.ok_or(Error::EmptyBody);
+                    }
+                }
+                if let Some((default_binding, default_body)) = default {
+                    env.define_var(default_binding.to_owned(), Value::Variant(label, val));
+                    let mut ret = None;
+                    for expr in default_body {
+                        ret = Some(eval(env, expr)?);
+                    }
+                    env.load_closure(closure);
+                    return ret.ok_or(Error::EmptyBody);
+                }
+                unreachable!()
+            }
         },
         Value::DottedList(_, _) => todo!(),
         Value::PrimitiveFunc(_) => todo!(),

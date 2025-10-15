@@ -107,6 +107,12 @@ pub struct Constraints {
     constraints: Vec<String>,
 }
 
+impl From<Vec<String>> for Constraints {
+    fn from(constraints: Vec<String>) -> Self {
+        Constraints { constraints }
+    }
+}
+
 impl Constraints {
     pub fn union(mut self, other: Self) -> Self {
         for constraint in &other.constraints {

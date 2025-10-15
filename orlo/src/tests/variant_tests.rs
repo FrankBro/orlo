@@ -4,7 +4,7 @@ use crate::repl::Repl;
 fn tests() {
     let cases: &[(&str, &str)] = &[
         ("(.a 1)", "(the (.a int . ra) (.a 1))"),
-        // match next
+        ("(match (.a 1) ((.a a) a))", "(the int 1)"),
     ];
     let mut repl = Repl::default();
     for (input, expected) in cases {

@@ -779,6 +779,47 @@ impl Env {
                     }
                     Ok(ret)
                 }
+                Form::Match { val, arms, def } => {
+                    let val = self.infer(level, val)?;
+                    let (ret, rest) = match def {
+                        None => (self.new_unbound_tvar(level), Type::RowEmpty),
+                        Some((var, body)) => {
+                            // row
+                            let constraints: Vec<String> =
+                                arms.iter().map(|(label, _, _)| label.to_string()).collect();
+                            let row = self.new_unbound_row_tvar(level, constraints.into());
+                            // def arm
+                            let old_vars = self.vars.clone();
+                            self.vars
+                                .insert(var.to_owned(), Type::Variant(row.clone().into()));
+                            let mut ret = Type::Const("void".to_owned());
+                            for val in body {
+                                let body_ty = self.infer(level, val)?;
+                                ret = body_ty;
+                            }
+                            self.vars = old_vars;
+                            (ret, row)
+                        }
+                    };
+                    // arms
+                    let mut labels: Vec<(String, Type)> = Vec::new();
+                    for (label, var, body) in arms {
+                        let val = self.new_unbound_tvar(level);
+                        let old_vars = self.vars.clone();
+                        self.vars.insert(var.to_owned(), val.clone());
+                        let mut arm_ret = Type::Const("void".to_owned());
+                        for val in body {
+                            let val = self.infer(level, val)?;
+                            arm_ret = val;
+                        }
+                        self.vars = old_vars;
+                        self.unify(&ret, &arm_ret)?;
+                        labels.push((label.to_owned(), val));
+                    }
+                    let row = Type::RowExtend(labels, rest.into());
+                    self.unify(&val, &Type::Variant(row.into()))?;
+                    Ok(ret)
+                }
             },
             Value::DottedList(_values, _value) => todo!(),
             Value::Func {
