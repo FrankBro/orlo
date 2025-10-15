@@ -2,7 +2,7 @@ pub mod env;
 pub mod error;
 pub mod eval;
 pub mod expander;
-// pub mod identifier;
+pub mod identifier;
 pub mod infer;
 pub mod parser;
 pub mod primitive;

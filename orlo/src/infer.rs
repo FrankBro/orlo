@@ -1,9 +1,10 @@
 use std::collections::HashMap;
 
 use crate::{
+    identifier::{self, Access, Form, identify},
     parser::parse_multiple,
     typing::{Constraints, Id, Level, Type, TypeVar, replace_ty_constants_with_vars},
-    value::{IOFunc, PrimitiveFunc, QUOTE, Value},
+    value::{IOFunc, PrimitiveFunc, Value},
 };
 
 pub static SYMBOL: &str = "symbol";
@@ -31,6 +32,13 @@ pub enum Error {
     RowConstraintFailed(String),
     RecursiveRowType,
     NoSuchField(String, Value),
+    Form(identifier::Error),
+}
+
+impl From<identifier::Error> for Error {
+    fn from(error: identifier::Error) -> Self {
+        Error::Form(error)
+    }
 }
 
 type Result<T> = std::result::Result<T, Error>;
@@ -402,38 +410,22 @@ impl Env {
     fn define_arrow(
         &mut self,
         level: Level,
-        params: &[Value],
-        vararg: Option<&Value>,
+        params: Vec<&str>,
+        vararg: Option<&str>,
         body: &[Value],
     ) -> Result<Type> {
         let mut param_tys = Vec::with_capacity(params.len());
         let old_vars = self.vars.clone();
         for param in params {
-            let param = match param {
-                Value::Atom(name) => name,
-                _ => {
-                    return Err(Error::FunctionArgNotSymbol(format!(
-                        "{:?} is not a symbol",
-                        param
-                    )));
-                }
-            };
             let param_ty = self.new_unbound_tvar(level);
-            self.vars.insert(param.to_owned(), param_ty.clone());
+            self.vars.insert(param.to_string(), param_ty.clone());
             param_tys.push(param_ty);
         }
         let vararg_ty = match vararg.as_ref() {
-            Some(Value::Atom(name)) => {
+            Some(name) => {
                 let vararg_ty = self.new_unbound_tvar(level);
-                self.vars.insert(name.to_owned(), vararg_ty.clone());
+                self.vars.insert(name.to_string(), vararg_ty.clone());
                 Some(vararg_ty)
-            }
-
-            Some(_) => {
-                return Err(Error::FunctionArgNotSymbol(format!(
-                    "{:?} is not a symbol",
-                    vararg
-                )));
             }
             None => None,
         };
@@ -525,76 +517,8 @@ impl Env {
             Value::Record(vals) => self.infer_record(level, vals, None),
             Value::DottedRecord(vals, rest) => self.infer_record(level, vals, Some(rest)),
             Value::Variant(label, val) => self.infer_variant(level, label, val),
-            Value::List(vals) => match &vals[..] {
-                [] => Ok(Type::ListNil),
-                [Value::Atom(atom), container, Value::List(accesses)] if atom == "access" => {
-                    let mut ty = self.infer(level, container)?;
-                    for access in accesses {
-                        match access {
-                            Value::Atom(label) => {
-                                let rest = self
-                                    .new_unbound_row_tvar(level, Constraints::from_label(label));
-                                let value = self.new_unbound_tvar(level);
-                                let rec = Type::Record(
-                                    Type::RowExtend(
-                                        vec![(label.clone(), value.clone())],
-                                        Box::new(rest),
-                                    )
-                                    .into(),
-                                );
-                                self.unify(&rec, &ty)?;
-                                ty = value;
-                            }
-                            Value::Number(_) => {
-                                let value = self.new_unbound_tvar(level);
-                                let arr = Type::Array(Box::new(value.clone()));
-                                self.unify(&arr, &ty)?;
-                                ty = value;
-                            }
-                            ty => {
-                                return Err(Error::BadSpecialForm(
-                                    format!(
-                                        "access requires a record and field name or array and index, got {:?}",
-                                        ty
-                                    ),
-                                    val.clone(),
-                                ));
-                            }
-                        }
-                    }
-                    Ok(ty.clone())
-                }
-                [Value::Atom(atom), val] if atom == QUOTE => match val {
-                    Value::Atom(_) => Ok(Type::Const(SYMBOL.to_owned())),
-                    Value::List(vals) => {
-                        let mut ty = Type::ListNil;
-                        for val in vals.iter().rev() {
-                            let head = self.infer(level, val)?;
-                            ty = Type::ListCons(Box::new(head), Box::new(ty));
-                        }
-                        Ok(ty)
-                    }
-                    Value::DottedList(vals, tail) => {
-                        let mut ty = self.infer(level, tail)?;
-                        for val in vals.iter().rev() {
-                            let head = self.infer(level, val)?;
-                            ty = Type::ListCons(Box::new(head), Box::new(ty));
-                        }
-                        Ok(ty)
-                    }
-                    Value::Record(vals) => self.infer_record(level, vals, None),
-                    Value::DottedRecord(vals, rest) => self.infer_record(level, vals, Some(rest)),
-                    Value::Variant(label, val) => self.infer_variant(level, label, val),
-                    Value::Array(vals) => self.infer_array(level, vals),
-                    Value::Number(_) => Ok(Type::Const(INT.to_owned())),
-                    Value::String(_) => Ok(Type::Const("string".to_owned())),
-                    Value::Bool(_) => Ok(Type::Const("bool".to_owned())),
-                    Value::PrimitiveFunc(_) => Ok(Type::Const("primitive-func".to_owned())),
-                    Value::Func { .. } => Ok(Type::Const("func".to_owned())),
-                    Value::IOFunc(_) => Ok(Type::Const("io-func".to_owned())),
-                    Value::Port(_) => Ok(Type::Const("port".to_owned())),
-                },
-                [Value::Atom(atom), body @ ..] if atom == "append" => {
+            Value::List(vals) => match identify(vals)? {
+                Form::Append(vals) => {
                     let mut ty = Type::ListNil;
 
                     fn append_list(acc: Type, ty: Type) -> Result<Type> {
@@ -611,143 +535,135 @@ impl Env {
                         }
                     }
 
-                    for val in body.iter().rev() {
+                    for val in vals.iter().rev() {
                         let arg_ty = self.infer(level, val)?;
                         let arg_ty = self.prune_type(&arg_ty)?;
                         ty = append_list(ty, arg_ty)?;
                     }
                     Ok(ty)
                 }
-                [Value::Atom(atom), body @ ..] if atom == "list" => {
+                Form::List(vals) => {
                     let mut ty = Type::ListNil;
-                    for val in body.iter().rev() {
+                    for val in vals.iter().rev() {
                         let head = self.infer(level, val)?;
                         ty = Type::ListCons(Box::new(head), Box::new(ty));
                     }
                     Ok(ty)
                 }
-                [Value::Atom(atom), pred, conseq, alt] if atom == "if" => {
-                    let pred_ty = self.infer(level, pred)?;
-                    self.unify(&pred_ty, &Type::Const(BOOL.to_owned()))?;
-                    let conseq_ty = self.infer(level, conseq)?;
-                    let alt_ty = self.infer(level, alt)?;
-                    self.unify(&conseq_ty, &alt_ty)?;
-                    Ok(conseq_ty)
+                Form::Access(container, accesses) => {
+                    let mut ty = self.infer(level, container)?;
+                    for access in accesses {
+                        match access {
+                            Access::Index(_) => {
+                                let value = self.new_unbound_tvar(level);
+                                let arr = Type::Array(Box::new(value.clone()));
+                                self.unify(&arr, &ty)?;
+                                ty = value;
+                            }
+                            Access::Field(label) => {
+                                let rest = self
+                                    .new_unbound_row_tvar(level, Constraints::from_label(label));
+                                let value = self.new_unbound_tvar(level);
+                                let rec = Type::Record(
+                                    Type::RowExtend(
+                                        vec![(label.to_owned(), value.clone())],
+                                        Box::new(rest),
+                                    )
+                                    .into(),
+                                );
+                                self.unify(&rec, &ty)?;
+                                ty = value;
+                            }
+                        }
+                    }
+                    Ok(ty.clone())
                 }
-                [Value::Atom(atom), Value::Atom(var), form] if atom == "set!" => {
-                    let var_ty = self.infer(level, form)?;
-                    let old_ty = self.get_var(var)?;
-                    self.unify(&old_ty, &var_ty)?;
-                    Ok(var_ty)
+                Form::If {
+                    cond,
+                    then_branch,
+                    else_branch,
+                } => {
+                    let cond = self.infer(level, cond)?;
+                    self.unify(&cond, &Type::Const(BOOL.to_owned()))?;
+                    let then_branch = self.infer(level, then_branch)?;
+                    let else_branch = self.infer(level, else_branch)?;
+                    self.unify(&then_branch, &else_branch)?;
+                    Ok(then_branch)
                 }
-                [Value::Atom(atom), Value::Atom(var), element] if atom == "push!" => {
-                    let element = self.infer(level, element)?;
+                Form::Set { var, val } => {
+                    let val = self.infer(level, val)?;
+                    let var = self.get_var(var)?;
+                    self.unify(&var, &val)?;
+                    Ok(var)
+                }
+                Form::Push { var, val } => {
+                    let name = var;
+                    let val = self.infer(level, val)?;
+                    let var = self.get_var(var)?;
 
-                    let array = self.get_var(var)?;
-
-                    match self.prune_type(&array)? {
-                        Type::Array(elem_ty) => {
-                            self.unify(&elem_ty, &element)?;
+                    match self.prune_type(&var)? {
+                        Type::Array(elem) => {
+                            self.unify(&elem, &val)?;
                         }
                         _ => {
                             return Err(Error::BadSpecialForm(
                                 "push! requires an array variable".to_owned(),
-                                Value::Atom(var.clone()),
+                                Value::Atom(name.to_owned()),
                             ));
                         }
                     }
-
-                    Ok(array)
+                    Ok(var)
                 }
-                [Value::Atom(atom), Value::Atom(var), form] if atom == "define" => {
-                    let var_ty = self.infer(level + 1, form)?;
-                    self.generalize(level, &var_ty)?;
-                    self.vars.insert(var.clone(), var_ty.clone());
-                    Ok(var_ty)
+                Form::DefineValue { name, val } => {
+                    let val = self.infer(level + 1, val)?;
+                    self.generalize(level, &val)?;
+                    self.vars.insert(name.to_owned(), val.clone());
+                    Ok(val)
                 }
-                [Value::Atom(atom), body @ ..] if atom == "begin" => {
-                    let mut ret_ty = Type::Const("void".to_owned());
-                    for val in body {
-                        let body_ty = self.infer(level, val)?;
-                        ret_ty = body_ty;
+                Form::DefineFunction {
+                    name,
+                    params,
+                    vararg,
+                    body,
+                } => {
+                    let ty = self.define_arrow(level, params, vararg, body)?;
+                    self.generalize(level, &ty)?;
+                    self.vars.insert(name.to_owned(), ty.clone());
+                    Ok(ty)
+                }
+                Form::Quote(val) => match val {
+                    Value::Atom(_) => Ok(Type::Const(SYMBOL.to_owned())),
+                    Value::List(vals) => {
+                        let mut ty = Type::ListNil;
+                        for val in vals.iter().rev() {
+                            let head = self.infer(level, val)?;
+                            ty = Type::ListCons(Box::new(head), Box::new(ty));
+                        }
+                        Ok(ty)
                     }
-                    Ok(ret_ty)
+                    val => self.infer(level, val),
+                },
+                Form::Begin(vals) => {
+                    let mut ret = Type::Const("void".to_owned());
+                    for val in vals {
+                        let val = self.infer(level, val)?;
+                        ret = val;
+                    }
+                    Ok(ret)
                 }
-                [Value::Atom(atom), Value::List(name_args), _body] if atom == "define-macro" => {
-                    let macro_name = match name_args.first() {
-                        Some(Value::Atom(name)) => name,
-                        other => {
-                            return Err(Error::DefineMacroNotSymbol(
-                                other.cloned().unwrap_or(Value::List(vec![])),
-                            ));
-                        }
-                    };
+                Form::DefineMacro { name, .. } => {
                     let ty = Type::Const(SYMBOL.to_owned());
-                    self.vars.insert(macro_name.clone(), ty.clone());
+                    self.vars.insert(name.to_owned(), ty.clone());
                     Ok(ty)
                 }
-                [
-                    Value::Atom(atom),
-                    Value::DottedList(name_args, _vararg),
-                    _body,
-                ] if atom == "define-macro" => {
-                    let macro_name = match name_args.first() {
-                        Some(Value::Atom(name)) => name,
-                        other => {
-                            return Err(Error::DefineMacroNotSymbol(
-                                other.cloned().unwrap_or(Value::List(vec![])),
-                            ));
-                        }
-                    };
-                    let ty = Type::Const(SYMBOL.to_owned());
-                    self.vars.insert(macro_name.clone(), ty.clone());
-                    Ok(ty)
-                }
-                [Value::Atom(atom), Value::List(name_args), body @ ..] if atom == "define" => {
-                    let func_name = match name_args.first() {
-                        Some(Value::Atom(name)) => name,
-                        other => {
-                            return Err(Error::DefineFunctionNotSymbol(
-                                other.cloned().unwrap_or(Value::List(vec![])),
-                            ));
-                        }
-                    };
-                    let ty = self.define_arrow(level, &name_args[1..], None, body)?;
-                    self.generalize(level, &ty)?;
-                    self.vars.insert(func_name.to_owned(), ty.clone());
-                    Ok(ty)
-                }
-                [
-                    Value::Atom(atom),
-                    Value::DottedList(name_args, vararg),
-                    body @ ..,
-                ] if atom == "define" => {
-                    let func_name = match name_args.first() {
-                        Some(Value::Atom(name)) => name,
-                        other => {
-                            return Err(Error::DefineFunctionNotSymbol(
-                                other.cloned().unwrap_or(Value::List(vec![])),
-                            ));
-                        }
-                    };
-                    let ty = self.define_arrow(level, &name_args[1..], Some(vararg), body)?;
-                    self.generalize(level, &ty)?;
-                    self.vars.insert(func_name.to_owned(), ty.clone());
-                    Ok(ty)
-                }
-                [Value::Atom(atom), Value::List(params), body @ ..] if atom == "lambda" => {
-                    self.define_arrow(level, params, None, body)
-                }
-                [
-                    Value::Atom(atom),
-                    Value::DottedList(params, vararg),
-                    body @ ..,
-                ] if atom == "lambda" => self.define_arrow(level, params, Some(vararg), body),
-                [Value::Atom(atom), vararg @ Value::Atom(_), body @ ..] if atom == "lambda" => {
-                    self.define_arrow(level, &[], Some(vararg), body)
-                }
-                [Value::Atom(atom), Value::String(path)] if atom == "load" => {
-                    let lines = std::fs::read_to_string(path).map_err(|e| Error::IO(e.kind()))?;
+                Form::Lambda {
+                    params,
+                    vararg,
+                    body,
+                } => self.define_arrow(level, params, vararg, body),
+                Form::Load { filename } => {
+                    let lines =
+                        std::fs::read_to_string(filename).map_err(|e| Error::IO(e.kind()))?;
                     let vals = parse_multiple(&lines).map_err(|_| Error::Parser)?;
                     let mut ret = None;
                     for val in vals {
@@ -756,169 +672,74 @@ impl Env {
                     }
                     Ok(ret.unwrap_or(Type::Const("void".to_owned())))
                 }
-                [Value::Atom(atom), Value::List(bindings), body @ ..] if atom == "let" => {
+                Form::Let {
+                    name,
+                    bindings,
+                    body,
+                } => {
                     let old_vars = self.vars.clone();
-                    for binding in bindings {
-                        match binding {
-                            Value::List(pair) if pair.len() == 2 => {
-                                let var = match &pair[0] {
-                                    Value::Atom(name) => name,
-                                    other => {
-                                        return Err(Error::FunctionArgNotSymbol(format!(
-                                            "{:?} is not a symbol",
-                                            other
-                                        )));
-                                    }
-                                };
-                                let var_ty = self.infer(level + 1, &pair[1])?;
-                                self.generalize(level, &var_ty)?;
-                                self.vars.insert(var.clone(), var_ty);
-                            }
-                            other => {
-                                return Err(Error::BadSpecialForm(
-                                    "let bindings must be pairs".to_owned(),
-                                    other.clone(),
-                                ));
-                            }
-                        }
-                    }
-                    let mut ret_ty = Type::Const("void".to_owned());
-                    for val in body {
-                        let body_ty = self.infer(level, val)?;
-                        ret_ty = body_ty;
-                    }
-                    self.vars = old_vars;
-                    Ok(ret_ty)
-                }
-                [
-                    Value::Atom(atom),
-                    Value::Atom(name),
-                    Value::List(bindings),
-                    body @ ..,
-                ] if atom == "let" => {
-                    let old_vars = self.vars.clone();
+                    let mut vars = Vec::with_capacity(bindings.len());
+                    let mut vals = Vec::with_capacity(bindings.len());
 
-                    // Create a new environment for the named function
-                    let mut vars_types = Vec::new();
-                    let mut param_names = Vec::new();
-
-                    // Process bindings to collect variables and their types
-                    for binding in bindings {
-                        match binding {
-                            Value::List(pair) if pair.len() == 2 => {
-                                let var = match &pair[0] {
-                                    Value::Atom(var_name) => var_name,
-                                    other => {
-                                        return Err(Error::FunctionArgNotSymbol(format!(
-                                            "{:?} is not a symbol",
-                                            other
-                                        )));
-                                    }
-                                };
-                                param_names.push(var.clone());
-                                let var_ty = self.infer(level + 1, &pair[1])?;
-                                self.generalize(level, &var_ty)?;
-                                vars_types.push((var.clone(), var_ty.clone()));
-                                self.vars.insert(var.clone(), var_ty);
-                            }
-                            other => {
-                                return Err(Error::BadSpecialForm(
-                                    "let bindings must be pairs".to_owned(),
-                                    other.clone(),
-                                ));
-                            }
-                        }
+                    for (param, val) in bindings {
+                        vars.push(param.to_owned());
+                        let val = self.infer(level + 1, val)?;
+                        self.generalize(level, &val)?;
+                        vals.push(val.clone());
+                        self.vars.insert(param.to_owned(), val);
                     }
 
-                    // Define the recursive function type
-                    let mut param_tys = Vec::new();
-                    for (_, ty) in &vars_types {
-                        param_tys.push(ty.clone());
-                    }
-
-                    // Create function type (params -> ret_ty)
-                    // Create param list structure
-                    let init = Type::ListNil;
-                    let params_list = param_tys.iter().rev().fold(init, |acc, param| {
-                        Type::ListCons(Box::new(param.clone()), Box::new(acc))
+                    let params = vals.iter().rev().fold(Type::ListNil, |acc, param| {
+                        Type::ListCons(param.clone().into(), acc.into())
                     });
+                    let arrow_ret = self.new_unbound_tvar(level);
+                    let arrow = Type::Arrow(params.into(), arrow_ret.clone().into());
 
-                    // Create a temporary return type
-                    let ret_ty_var = self.new_unbound_tvar(level);
+                    let name = name.unwrap_or("_");
+                    self.vars.insert(name.to_owned(), arrow.clone());
 
-                    // Create the function type
-                    let arrow = Type::Arrow(Box::new(params_list), Box::new(ret_ty_var.clone()));
-
-                    // Bind the function name in the environment BEFORE inferring the body
-                    // This allows recursive references to work properly
-                    self.vars.insert(name.clone(), arrow.clone());
-
-                    // Infer return type from the body
-                    let mut ret_ty = Type::Const("void".to_owned());
+                    let mut ret = Type::Const("void".to_owned());
                     for val in body {
-                        let body_ty = self.infer(level, val)?;
-                        ret_ty = body_ty;
+                        let body = self.infer(level, val)?;
+                        ret = body;
                     }
 
-                    // Unify the return type with what we found
-                    self.unify(&ret_ty_var, &ret_ty)?;
+                    self.unify(&arrow_ret, &ret)?;
 
-                    // Restore the original environment
                     self.vars = old_vars;
 
-                    Ok(ret_ty)
+                    Ok(ret)
                 }
-                [Value::Atom(atom), test, body @ ..] if atom == "while" => {
-                    let test_ty = self.infer(level, test)?;
-                    self.unify(&test_ty, &Type::Const(BOOL.to_owned()))?;
+                Form::While { cond, body } => {
+                    let cond = self.infer(level, cond)?;
+                    self.unify(&cond, &Type::Const(BOOL.to_owned()))?;
                     for val in body {
                         self.infer(level, val)?;
                     }
                     Ok(Type::Const("void".to_owned()))
                 }
-                [Value::Atom(atom), Value::List(bindings), body @ ..] if atom == "for" => {
+                Form::For { bindings, body } => {
                     // Save the old variables
                     let old_vars = self.vars.clone();
 
                     // Process each binding
-                    for binding in bindings {
-                        match binding {
-                            Value::List(pair) if pair.len() == 2 => {
-                                let var = match &pair[0] {
-                                    Value::Atom(name) => name,
-                                    other => {
-                                        return Err(Error::FunctionArgNotSymbol(format!(
-                                            "{:?} is not a symbol",
-                                            other
-                                        )));
-                                    }
-                                };
+                    for (var, val) in bindings {
+                        // Ensure the right side is an array type
+                        let array_ty = self.infer(level + 1, val)?;
 
-                                // Ensure the right side is an array type
-                                let array_ty = self.infer(level + 1, &pair[1])?;
-
-                                // Extract the element type from the array
-                                let element_ty = match array_ty {
-                                    Type::Array(elem_ty) => *elem_ty,
-                                    _ => {
-                                        return Err(Error::BadSpecialForm(
-                                            "for: right side of binding must be an array"
-                                                .to_owned(),
-                                            pair[1].clone(),
-                                        ));
-                                    }
-                                };
-
-                                // Add the variable with the element type
-                                self.vars.insert(var.clone(), element_ty);
-                            }
-                            other => {
+                        // Extract the element type from the array
+                        let element_ty = match array_ty {
+                            Type::Array(elem_ty) => *elem_ty,
+                            _ => {
                                 return Err(Error::BadSpecialForm(
-                                    "for: bindings must be pairs".to_owned(),
-                                    other.clone(),
+                                    "for: right side of binding must be an array".to_owned(),
+                                    val.clone(),
                                 ));
                             }
-                        }
+                        };
+
+                        // Add the variable with the element type
+                        self.vars.insert(var.to_string(), element_ty);
                     }
 
                     // Infer the types of the body for correctness, but ignore the return type
@@ -932,7 +753,7 @@ impl Env {
                     // Always return void type for 'for' loops
                     Ok(Type::Const("void".to_owned()))
                 }
-                [func, args @ ..] => {
+                Form::Call { func, args } => {
                     let f_ty = self.infer(level, func)?;
                     let (params, ret) = self.match_fun_ty(args.len(), f_ty)?;
                     let mut current = &params;

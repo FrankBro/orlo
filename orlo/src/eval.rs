@@ -1,8 +1,9 @@
 use crate::{
     env::Env,
     error::Error,
+    identifier::{Access, Form, identify},
     primitive::{self, load},
-    value::{IOFunc, PrimitiveFunc, QUOTE, Value},
+    value::{IOFunc, PrimitiveFunc, Value},
 };
 
 type Result<T> = std::result::Result<T, Error>;
@@ -102,26 +103,44 @@ pub fn eval(env: &mut Env, val: &Value) -> Result<Value> {
             }
             Ok(Value::Record(fields))
         }
-        Value::List(vals) => match &vals[..] {
-            [Value::Atom(atom), container, Value::List(accesses)] if atom == "access" => {
+        Value::List(vals) => match identify(vals)? {
+            Form::Append(vals) => {
+                let mut result = Vec::new();
+                for val in vals {
+                    match eval(env, val)? {
+                        Value::List(mut lst) => result.append(&mut lst),
+                        other => {
+                            return Err(Error::TypeMismatch("list".to_string(), other.clone()));
+                        }
+                    }
+                }
+                Ok(Value::List(result))
+            }
+            Form::List(vals) => {
+                let mut xs = Vec::new();
+                for val in vals {
+                    xs.push(eval(env, val)?);
+                }
+                Ok(Value::List(xs))
+            }
+            Form::Access(container, accesses) => {
                 let mut value = eval(env, container)?;
                 for access in accesses {
                     match (value, access) {
-                        (Value::Record(fields), Value::Atom(field_name)) => {
+                        (Value::Record(fields), Access::Field(field_name)) => {
                             match fields.iter().find(|(name, _)| name == field_name) {
                                 Some((_, field_value)) => {
                                     value = field_value.clone();
                                 }
                                 None => {
                                     return Err(Error::NoSuchField(
-                                        field_name.clone(),
+                                        field_name.to_owned(),
                                         Value::Record(fields.clone()),
                                     ));
                                 }
                             }
                         }
-                        (Value::Array(elements), Value::Number(index)) => {
-                            let index = *index;
+                        (Value::Array(elements), Access::Index(index)) => {
                             if index >= 0 {
                                 let index = index as usize;
                                 if index >= elements.len() {
@@ -153,140 +172,76 @@ pub fn eval(env: &mut Env, val: &Value) -> Result<Value> {
                 }
                 Ok(value)
             }
-            [Value::Atom(atom), Value::List(name_args), _body] if atom == "define-macro" => {
-                let macro_name = match name_args.first() {
-                    Some(Value::Atom(name)) => name,
-                    _ => {
-                        return Err(Error::BadSpecialForm(
-                            "unrecognized special form".to_owned(),
-                            val.clone(),
-                        ));
-                    }
-                };
-                Ok(Value::Atom(macro_name.to_owned()))
+            Form::If {
+                cond,
+                then_branch,
+                else_branch,
+            } => {
+                let result = eval(env, cond)?;
+                match result {
+                    Value::Bool(true) => eval(env, then_branch),
+                    Value::Bool(false) => eval(env, else_branch),
+                    _ => Err(Error::BadSpecialForm(
+                        "if condition must evaluate to a boolean".to_owned(),
+                        cond.clone(),
+                    )),
+                }
             }
-            [
-                Value::Atom(atom),
-                Value::DottedList(name_args, _vararg),
-                _body,
-            ] if atom == "define-macro" => {
-                let macro_name = match name_args.first() {
-                    Some(Value::Atom(name)) => name,
-                    _ => {
-                        return Err(Error::BadSpecialForm(
-                            "unrecognized special form".to_owned(),
-                            val.clone(),
-                        ));
-                    }
-                };
-                Ok(Value::Atom(macro_name.to_owned()))
+            Form::Set { var, val } => {
+                let val = eval(env, val)?;
+                env.set_var(var, val)
             }
-            [Value::Atom(atom), body @ ..] if atom == "begin" => {
+            Form::Push { var, val } => {
+                let val = eval(env, val)?;
+                let arr = env.get_var(var)?;
+                match arr {
+                    Value::Array(arr) => {
+                        let mut new_arr = arr.clone();
+                        new_arr.push(val);
+                        env.set_var(var, Value::Array(new_arr))
+                    }
+                    _ => Err(Error::TypeMismatch("array".to_string(), arr.clone())),
+                }
+            }
+            Form::DefineValue { name, val } => {
+                let val = eval(env, val)?;
+                Ok(env.define_var(name.to_owned(), val))
+            }
+            Form::DefineFunction {
+                name,
+                params,
+                vararg,
+                body,
+            } => {
+                let closure = env.make_closure();
+                let params = params.into_iter().map(|arg| arg.to_owned()).collect();
+                let vararg = vararg.map(|arg| arg.to_owned());
+                let body = body.to_vec();
+                let func = Value::Func {
+                    params,
+                    vararg,
+                    body,
+                    closure,
+                };
+                Ok(env.define_var(name.to_owned(), func))
+            }
+            Form::Quote(val) => Ok(val.clone()),
+            Form::Begin(body) => {
                 let mut ret = None;
                 for expr in body {
                     ret = Some(eval(env, expr)?);
                 }
                 ret.ok_or(Error::EmptyBody)
             }
-            [Value::Atom(atom), val] if atom == QUOTE => Ok(val.clone()),
-            [Value::Atom(atom), body @ ..] if atom == "append" => {
-                let mut result = Vec::new();
-                for val in body {
-                    match eval(env, val)? {
-                        Value::List(mut lst) => result.append(&mut lst),
-                        other => {
-                            return Err(Error::TypeMismatch("list".to_string(), other.clone()));
-                        }
-                    }
-                }
-                Ok(Value::List(result))
-            }
-            [Value::Atom(atom), body @ ..] if atom == "list" => {
-                let elements = body
-                    .iter()
-                    .map(|val| eval(env, val))
-                    .collect::<Result<Vec<_>>>()?;
-                Ok(Value::List(elements))
-            }
-            [Value::Atom(atom), pred, conseq, alt] if atom == "if" => {
-                let result = eval(env, pred)?;
-                match result {
-                    Value::Bool(false) => eval(env, alt),
-                    _ => eval(env, conseq),
-                }
-            }
-            [Value::Atom(atom), Value::Atom(var), form] if atom == "set!" => {
-                let val = eval(env, form)?;
-                env.set_var(var, val)
-            }
-            [Value::Atom(atom), Value::Atom(var), element] if atom == "push!" => {
-                let element_val = eval(env, element)?;
-                let array_val = env.get_var(var)?;
-                match array_val {
-                    Value::Array(arr) => {
-                        let mut new_arr = arr.clone();
-                        new_arr.push(element_val);
-                        env.set_var(var, Value::Array(new_arr))
-                    }
-                    _ => Err(Error::TypeMismatch("array".to_string(), array_val.clone())),
-                }
-            }
-            [Value::Atom(atom), Value::Atom(var), form] if atom == "define" => {
-                let val = eval(env, form)?;
-                Ok(env.define_var(var.clone(), val))
-            }
-            [Value::Atom(atom), Value::List(name_args), body @ ..] if atom == "define" => {
-                let (name, args) = match &name_args[..] {
-                    [Value::Atom(name), args @ ..] => (name.clone(), args.to_vec()),
-                    _ => {
-                        return Err(Error::BadSpecialForm(
-                            "unrecognized special form".to_owned(),
-                            val.clone(),
-                        ));
-                    }
-                };
+            Form::DefineMacro { name, .. } => Ok(Value::Atom(name.to_owned())),
+            Form::Lambda {
+                params,
+                vararg,
+                body,
+            } => {
                 let closure = env.make_closure();
-                let params = args.into_iter().map(|arg| arg.to_string()).collect();
-                let vararg = None;
-                let body = body.to_vec();
-                let func = Value::Func {
-                    params,
-                    vararg,
-                    body,
-                    closure,
-                };
-                Ok(env.define_var(name, func))
-            }
-            [
-                Value::Atom(atom),
-                Value::DottedList(name_args, vararg),
-                body @ ..,
-            ] if atom == "define" => {
-                let (name, args) = match &name_args[..] {
-                    [Value::Atom(name), args @ ..] => (name.clone(), args.to_vec()),
-                    _ => {
-                        return Err(Error::BadSpecialForm(
-                            "unrecognized special form".to_owned(),
-                            val.clone(),
-                        ));
-                    }
-                };
-                let closure = env.make_closure();
-                let params = args.into_iter().map(|arg| arg.to_string()).collect();
-                let vararg = Some(vararg.clone().to_string());
-                let body = body.to_vec();
-                let func = Value::Func {
-                    params,
-                    vararg,
-                    body,
-                    closure,
-                };
-                Ok(env.define_var(name, func))
-            }
-            [Value::Atom(atom), Value::List(params), body @ ..] if atom == "lambda" => {
-                let closure = env.make_closure();
-                let params = params.iter().map(|param| param.to_string()).collect();
-                let vararg = None;
+                let params = params.into_iter().map(|param| param.to_owned()).collect();
+                let vararg = vararg.map(|arg| arg.to_owned());
                 let body = body.to_vec();
                 Ok(Value::Func {
                     params,
@@ -295,110 +250,29 @@ pub fn eval(env: &mut Env, val: &Value) -> Result<Value> {
                     closure,
                 })
             }
-            [
-                Value::Atom(atom),
-                Value::DottedList(params, vararg),
-                body @ ..,
-            ] if atom == "lambda" => {
-                let closure = env.make_closure();
-                let params = params.iter().map(|param| param.to_string()).collect();
-                let vararg = Some(vararg.clone().to_string());
-                let body = body.to_vec();
-                Ok(Value::Func {
-                    params,
-                    vararg,
-                    body,
-                    closure,
-                })
-            }
-            [Value::Atom(atom), Value::Atom(vararg), body @ ..] if atom == "lambda" => {
-                let closure = env.make_closure();
-                let params = Vec::new();
-                let vararg = Some(vararg.clone());
-                let body = body.to_vec();
-                Ok(Value::Func {
-                    params,
-                    vararg,
-                    body,
-                    closure,
-                })
-            }
-            [Value::Atom(atom), Value::String(path)] if atom == "load" => {
-                let vals = load(path)?;
+            Form::Load { filename } => {
+                let vals = load(filename)?;
                 let mut ret = None;
                 for val in vals {
                     ret = Some(eval(env, &val)?);
                 }
                 ret.ok_or(Error::EmptyBody)
             }
-            [Value::Atom(atom), Value::List(bindings), body @ ..] if atom == "let" => {
+            Form::Let {
+                name,
+                bindings,
+                body,
+            } => {
                 let closure = env.make_closure();
-                for binding in bindings {
-                    match binding {
-                        Value::List(pair) if pair.len() == 2 => {
-                            let var = match &pair[0] {
-                                Value::Atom(var) => var,
-                                _ => {
-                                    return Err(Error::BadSpecialForm(
-                                        "unrecognized special form".to_owned(),
-                                        val.clone(),
-                                    ));
-                                }
-                            };
-                            let expr = &pair[1];
-                            let value = eval(env, expr)?;
-                            env.define_var(var.clone(), value);
-                        }
-                        _ => {
-                            return Err(Error::BadSpecialForm(
-                                "unrecognized special form".to_owned(),
-                                val.clone(),
-                            ));
-                        }
-                    }
-                }
-                let mut ret = None;
-                for expr in body {
-                    ret = Some(eval(env, expr)?);
-                }
-                env.load_closure(closure);
-                ret.ok_or(Error::EmptyBody)
-            }
-            [
-                Value::Atom(atom),
-                Value::Atom(name),
-                Value::List(bindings),
-                body @ ..,
-            ] if atom == "let" => {
-                let closure = env.make_closure();
-                // Extract variables and values from bindings
-                let mut vars = Vec::new();
-                let mut values = Vec::new();
-                for binding in bindings {
-                    match binding {
-                        Value::List(pair) if pair.len() == 2 => {
-                            let var = match &pair[0] {
-                                Value::Atom(var) => var,
-                                _ => {
-                                    return Err(Error::BadSpecialForm(
-                                        "unrecognized special form".to_owned(),
-                                        val.clone(),
-                                    ));
-                                }
-                            };
-                            vars.push(var.clone());
-                            values.push(eval(env, &pair[1])?);
-                        }
-                        _ => {
-                            return Err(Error::BadSpecialForm(
-                                "unrecognized special form".to_owned(),
-                                val.clone(),
-                            ));
-                        }
-                    }
+                let mut vars = Vec::with_capacity(bindings.len());
+                let mut vals = Vec::with_capacity(bindings.len());
+
+                for (param, val) in bindings {
+                    vars.push(param.to_owned());
+                    let val = eval(env, val)?;
+                    vals.push(val);
                 }
 
-                // Create a function that can be called recursively
                 let params = vars.clone();
                 let vararg = None;
                 let func_body = body.to_vec();
@@ -410,16 +284,13 @@ pub fn eval(env: &mut Env, val: &Value) -> Result<Value> {
                     closure: func_closure.clone(),
                 };
 
-                // Define the named function in the environment BEFORE evaluating the body
-                // so the recursive calls inside the body can find it
-                env.define_var(name.clone(), func);
+                let name = name.unwrap_or("_");
+                env.define_var(name.to_owned(), func);
 
-                // Define the initial variables
-                for (var, value) in vars.iter().zip(values.iter()) {
-                    env.define_var(var.clone(), value.clone());
+                for (param, val) in vars.iter().zip(vals.iter()) {
+                    env.define_var(param.to_owned(), val.clone());
                 }
 
-                // Evaluate the body
                 let mut ret = None;
                 for expr in body {
                     ret = Some(eval(env, expr)?);
@@ -427,9 +298,9 @@ pub fn eval(env: &mut Env, val: &Value) -> Result<Value> {
                 env.load_closure(closure);
                 ret.ok_or(Error::EmptyBody)
             }
-            [Value::Atom(atom), test, body @ ..] if atom == "while" => {
+            Form::While { cond, body } => {
                 let closure = env.make_closure();
-                while match eval(env, test)? {
+                while match eval(env, cond)? {
                     Value::Bool(true) => true,
                     Value::Bool(false) => false,
                     other => {
@@ -443,45 +314,24 @@ pub fn eval(env: &mut Env, val: &Value) -> Result<Value> {
                 env.load_closure(closure);
                 Ok(Value::List(vec![]))
             }
-            [Value::Atom(atom), Value::List(bindings), body @ ..] if atom == "for" => {
+            Form::For { bindings, body } => {
                 // TODO: AI code needs to be reviewed and rewritten probably
                 // Extract bindings
                 let mut var_names = Vec::new();
                 let mut arrays = Vec::new();
 
-                for binding in bindings {
-                    match binding {
-                        Value::List(pair) if pair.len() == 2 => {
-                            let var = match &pair[0] {
-                                Value::Atom(var) => var.clone(),
-                                _ => {
-                                    return Err(Error::BadSpecialForm(
-                                        "for: variable name must be a symbol".to_owned(),
-                                        val.clone(),
-                                    ));
-                                }
-                            };
+                for (var, array_expr) in bindings {
+                    let array_val = eval(env, array_expr)?;
 
-                            let array_expr = &pair[1];
-                            let array_val = eval(env, array_expr)?;
-
-                            match array_val {
-                                Value::Array(items) => {
-                                    var_names.push(var);
-                                    arrays.push(items);
-                                }
-                                _ => {
-                                    return Err(Error::BadSpecialForm(
-                                        "for: right side of binding must be an array".to_owned(),
-                                        array_val,
-                                    ));
-                                }
-                            }
+                    match array_val {
+                        Value::Array(items) => {
+                            var_names.push(var.to_owned());
+                            arrays.push(items);
                         }
                         _ => {
                             return Err(Error::BadSpecialForm(
-                                "for: bindings must be pairs".to_owned(),
-                                val.clone(),
+                                "for: right side of binding must be an array".to_owned(),
+                                array_val,
                             ));
                         }
                     }
@@ -555,7 +405,7 @@ pub fn eval(env: &mut Env, val: &Value) -> Result<Value> {
                     Ok(Value::List(vec![]))
                 }
             }
-            [func, args @ ..] => {
+            Form::Call { func, args } => {
                 let func = eval(env, func)?;
                 let args = args
                     .iter()
@@ -566,10 +416,6 @@ pub fn eval(env: &mut Env, val: &Value) -> Result<Value> {
                 env.load_closure(closure);
                 ret
             }
-            _ => Err(Error::BadSpecialForm(
-                "unrecognized special form".to_owned(),
-                val.clone(),
-            )),
         },
         Value::DottedList(_, _) => todo!(),
         Value::PrimitiveFunc(_) => todo!(),

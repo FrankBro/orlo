@@ -1,6 +1,6 @@
 use std::{fmt::Display, io};
 
-use crate::{util::intersperse, value::Value};
+use crate::{identifier, util::intersperse, value::Value};
 
 #[derive(Debug, PartialEq)]
 pub enum Error {
@@ -15,6 +15,13 @@ pub enum Error {
     Parser,
     NoSuchField(String, Value),
     IndexOutOfBounds(i64, Value),
+    Form(identifier::Error),
+}
+
+impl From<identifier::Error> for Error {
+    fn from(error: identifier::Error) -> Self {
+        Error::Form(error)
+    }
 }
 
 impl Display for Error {
@@ -40,6 +47,7 @@ impl Display for Error {
             Error::IndexOutOfBounds(index, value) => {
                 write!(f, "Index {index} out of bound for {value}")
             }
+            Error::Form(error) => write!(f, "Form '{}' error: {}", error.name, error.description),
         }
     }
 }
