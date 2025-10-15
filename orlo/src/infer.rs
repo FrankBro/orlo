@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use crate::{
     identifier::{self, Access, Form, identify},
     parser::parse_multiple,
-    typing::{Constraints, Id, Level, Type, TypeVar, replace_ty_constants_with_vars},
+    typing::{Id, Level, Type, TypeVar, replace_ty_constants_with_vars},
     value::{IOFunc, PrimitiveFunc, Value},
 };
 
@@ -62,12 +62,6 @@ impl Env {
         Type::Var(id)
     }
 
-    fn new_unbound_row_tvar(&mut self, level: Level, constraints: Constraints) -> Type {
-        let id = self.tvars.len();
-        self.tvars.push(TypeVar::UnboundRow(level, constraints));
-        Type::Var(id)
-    }
-
     fn new_weak_tvar(&mut self, level: Level) -> Type {
         let id = self.tvars.len();
         self.tvars.push(TypeVar::Weak(level));
@@ -77,13 +71,6 @@ impl Env {
     fn new_generic_tvar(&mut self) -> Type {
         let id = self.tvars.len();
         self.tvars.push(TypeVar::Generic);
-        Type::Var(id)
-    }
-
-    #[allow(dead_code)]
-    fn new_generic_row_tvar(&mut self, constraints: Constraints) -> Type {
-        let id = self.tvars.len();
-        self.tvars.push(TypeVar::GenericRow(constraints));
         Type::Var(id)
     }
 
@@ -129,23 +116,13 @@ impl Env {
                 let other_tvar = self.get_mut_tvar(*other_id)?;
                 match other_tvar.clone() {
                     TypeVar::Link(ty) => self.occurs_check_adjust_levels(tvar_id, tvar_level, &ty),
-                    TypeVar::Generic | TypeVar::GenericRow(_) => panic!(),
+                    TypeVar::Generic => panic!(),
                     TypeVar::Unbound(other_level) => {
                         if *other_id == tvar_id {
                             Err(Error::RecursiveType)
                         } else {
                             if other_level > tvar_level {
                                 *other_tvar = TypeVar::Unbound(tvar_level);
-                            }
-                            Ok(())
-                        }
-                    }
-                    TypeVar::UnboundRow(other_level, constraints) => {
-                        if *other_id == tvar_id {
-                            Err(Error::RecursiveType)
-                        } else {
-                            if other_level > tvar_level {
-                                *other_tvar = TypeVar::UnboundRow(tvar_level, constraints);
                             }
                             Ok(())
                         }
@@ -212,44 +189,6 @@ impl Env {
         }
     }
 
-    fn inject_constraints(&mut self, constraints: Constraints, ty: &Type) -> Result<()> {
-        match ty {
-            Type::Var(id) => {
-                let tvar = self.get_mut_tvar(*id)?;
-                match tvar.clone() {
-                    TypeVar::Link(ty) => self.inject_constraints(constraints, &ty),
-                    TypeVar::UnboundRow(level, other_constraints) => {
-                        let constraints = constraints.union(other_constraints);
-                        *tvar = TypeVar::UnboundRow(level, constraints);
-                        Ok(())
-                    }
-                    TypeVar::GenericRow(other_constraints) => {
-                        let constraints = constraints.union(other_constraints);
-                        *tvar = TypeVar::GenericRow(constraints);
-                        Ok(())
-                    }
-                    TypeVar::Unbound(_) | TypeVar::Generic | TypeVar::Weak(_) => {
-                        Err(Error::CannotInjectConstraintsInto(ty.clone()))
-                    }
-                }
-            }
-            Type::Record(row) => self.inject_constraints(constraints, row),
-            Type::Variant(row) => self.inject_constraints(constraints, row),
-            Type::RowEmpty => Ok(()),
-            Type::RowExtend(_, _) => {
-                let (labels, rest) = self.match_row_ty(ty)?;
-                for (label, _) in labels {
-                    if !constraints.contains(&label) {
-                        return Err(Error::RowConstraintFailed(label.clone()));
-                    }
-                }
-                self.inject_constraints(constraints, &rest)?;
-                Ok(())
-            }
-            _ => Err(Error::CannotInjectConstraintsInto(ty.clone())),
-        }
-    }
-
     fn unify(&mut self, ty1: &Type, ty2: &Type) -> Result<()> {
         if ty1 == ty2 {
             return Ok(());
@@ -282,18 +221,12 @@ impl Env {
                         self.occurs_check_adjust_levels(*id, level, ty2)?;
                         self.link(*id, ty2.clone())
                     }
-                    TypeVar::UnboundRow(level, constraints) => {
-                        self.inject_constraints(constraints, ty2)?;
-                        self.occurs_check_adjust_levels(*id, level, ty2)?;
-                        self.link(*id, ty1.clone())
-                    }
                     TypeVar::Weak(level) => {
                         self.occurs_check_adjust_levels(*id, level, ty2)?;
                         self.link(*id, ty2.clone())
                     }
                     TypeVar::Link(ty1) => self.unify(&ty1, ty2),
                     TypeVar::Generic => Err(Error::CannotUnify(ty1.clone(), ty2.clone())),
-                    TypeVar::GenericRow(_) => Err(Error::CannotUnify(ty1.clone(), ty2.clone())),
                 }
             }
             (_, Type::Var(id)) => {
@@ -303,18 +236,12 @@ impl Env {
                         self.occurs_check_adjust_levels(*id, level, ty1)?;
                         self.link(*id, ty1.clone())
                     }
-                    TypeVar::UnboundRow(level, constraints) => {
-                        self.inject_constraints(constraints, ty1)?;
-                        self.occurs_check_adjust_levels(*id, level, ty1)?;
-                        self.link(*id, ty1.clone())
-                    }
                     TypeVar::Weak(level) => {
                         self.occurs_check_adjust_levels(*id, level, ty1)?;
                         self.link(*id, ty1.clone())
                     }
                     TypeVar::Link(ty2) => self.unify(ty1, &ty2),
                     TypeVar::Generic => Err(Error::CannotUnify(ty1.clone(), ty2.clone())),
-                    TypeVar::GenericRow(_) => Err(Error::CannotUnify(ty1.clone(), ty2.clone())),
                 }
             }
             (Type::ListNil, Type::ListNil)
@@ -384,15 +311,7 @@ impl Env {
                     let tvar = self.get_tvar(id)?;
                     match tvar.clone() {
                         TypeVar::Unbound(level) => {
-                            let rest = self.new_unbound_row_tvar(level, Constraints::default());
-                            self.unify(&rest2, &Type::RowExtend(missing2, rest.clone().into()))?;
-                            if let TypeVar::Link(_) = self.get_tvar(id)? {
-                                return Err(Error::RecursiveRowType);
-                            }
-                            self.unify(&rest1, &Type::RowExtend(missing1, rest.into()))
-                        }
-                        TypeVar::UnboundRow(level, constraints) => {
-                            let rest = self.new_unbound_row_tvar(level, constraints);
+                            let rest = self.new_unbound_tvar(level);
                             self.unify(&rest2, &Type::RowExtend(missing2, rest.clone().into()))?;
                             if let TypeVar::Link(_) = self.get_tvar(id)? {
                                 return Err(Error::RecursiveRowType);
@@ -492,8 +411,7 @@ impl Env {
     }
 
     fn infer_variant(&mut self, level: Level, label: &str, val: &Value) -> Result<Type> {
-        let constraints = Constraints::from_label(label);
-        let rest = self.new_unbound_row_tvar(level, constraints);
+        let rest = self.new_unbound_tvar(level);
         let variant = self.new_unbound_tvar(level);
         let ret = Type::Variant(
             Type::RowExtend(vec![(label.to_owned(), variant.clone())], rest.into()).into(),
@@ -561,8 +479,7 @@ impl Env {
                                 ty = value;
                             }
                             Access::Field(label) => {
-                                let rest = self
-                                    .new_unbound_row_tvar(level, Constraints::from_label(label));
+                                let rest = self.new_unbound_tvar(level);
                                 let value = self.new_unbound_tvar(level);
                                 let rec = Type::Record(
                                     Type::RowExtend(
@@ -784,12 +701,8 @@ impl Env {
                     let (ret, rest) = match def {
                         None => (self.new_unbound_tvar(level), Type::RowEmpty),
                         Some((var, body)) => {
-                            // row
-                            let constraints: Vec<String> =
-                                arms.iter().map(|(label, _, _)| label.to_string()).collect();
-                            let row = self.new_unbound_row_tvar(level, constraints.into());
-                            // def arm
                             let old_vars = self.vars.clone();
+                            let row = self.new_unbound_tvar(level);
                             self.vars
                                 .insert(var.to_owned(), Type::Variant(row.clone().into()));
                             let mut ret = Type::Const("void".to_owned());
@@ -842,16 +755,8 @@ impl Env {
                         *tvar = TypeVar::Generic;
                         Ok(())
                     }
-                    TypeVar::UnboundRow(other_level, constraints) if other_level > level => {
-                        *tvar = TypeVar::GenericRow(constraints);
-                        Ok(())
-                    }
-                    TypeVar::Unbound(_) => Ok(()),
-                    TypeVar::UnboundRow(_, _) => Ok(()),
-                    TypeVar::Weak(_) => Ok(()),
                     TypeVar::Link(ty) => self.generalize(level, &ty),
-                    TypeVar::Generic => Ok(()),
-                    TypeVar::GenericRow(_) => Ok(()),
+                    TypeVar::Unbound(_) | TypeVar::Weak(_) | TypeVar::Generic => Ok(()),
                 }
             }
             Type::App(ty, args) => {
@@ -898,22 +803,14 @@ impl Env {
             Type::Var(id) => {
                 let tvar = self.get_tvar(id)?;
                 match tvar.clone() {
-                    TypeVar::Unbound(_) => Ok(ty),
-                    TypeVar::UnboundRow(_, _) => Ok(ty),
-                    TypeVar::Weak(_) => Ok(ty),
-                    TypeVar::Link(ty) => self.instantiate_impl(id_vars, level, ty),
                     TypeVar::Generic => {
                         let ty = id_vars
                             .entry(id)
                             .or_insert_with(|| self.new_unbound_tvar(level));
                         Ok(ty.clone())
                     }
-                    TypeVar::GenericRow(constraints) => {
-                        let ty = id_vars
-                            .entry(id)
-                            .or_insert_with(|| self.new_unbound_row_tvar(level, constraints));
-                        Ok(ty.clone())
-                    }
+                    TypeVar::Link(ty) => self.instantiate_impl(id_vars, level, ty),
+                    TypeVar::Unbound(_) | TypeVar::Weak(_) => Ok(ty),
                 }
             }
             Type::App(ty, args) => {
@@ -982,9 +879,7 @@ impl Env {
                         Ok((params, ret))
                     }
                     TypeVar::Link(ty) => self.match_fun_ty(num_params, ty),
-                    TypeVar::UnboundRow(_, _) | TypeVar::GenericRow(_) | TypeVar::Generic => {
-                        Err(Error::ExpectedAFunction(ty))
-                    }
+                    TypeVar::Generic => Err(Error::ExpectedAFunction(ty)),
                 }
             }
             _ => Err(Error::ExpectedAFunction(ty)),
@@ -1063,11 +958,7 @@ impl Env {
                 let tvar = self.get_tvar(*id)?;
                 match tvar {
                     TypeVar::Link(ty) => self.ty_to_string_impl(namer, ty),
-                    TypeVar::Generic
-                    | TypeVar::Unbound(_)
-                    | TypeVar::Weak(_)
-                    | TypeVar::UnboundRow(_, _)
-                    | TypeVar::GenericRow(_) => {
+                    TypeVar::Generic | TypeVar::Unbound(_) | TypeVar::Weak(_) => {
                         let name = namer.get_or_insert(*id, tvar);
                         Ok(name.to_string())
                     }
@@ -1310,24 +1201,18 @@ impl Env {
 
 struct Namers {
     unbound: Namer,
-    unbound_row: Namer,
     generic: Namer,
-    generic_row: Namer,
     weak: Namer,
 }
 
 impl Namers {
     fn new() -> Self {
         let unbound = Namer::new();
-        let unbound_row = Namer::new();
         let generic = Namer::new();
-        let generic_row = Namer::new();
         let weak = Namer::new();
         Self {
             unbound,
-            unbound_row,
             generic,
-            generic_row,
             weak,
         }
     }
@@ -1335,13 +1220,7 @@ impl Namers {
     fn get_or_insert(&mut self, id: Id, var: &TypeVar) -> String {
         match var {
             TypeVar::Unbound(_) => format!("_{}", self.unbound.get_or_insert(id)),
-            TypeVar::UnboundRow(_, _constraints) => {
-                format!("_r{}", self.unbound_row.get_or_insert(id))
-            }
             TypeVar::Generic => format!("{}", self.generic.get_or_insert(id)),
-            TypeVar::GenericRow(_constraints) => {
-                format!("r{}", self.generic_row.get_or_insert(id))
-            }
             TypeVar::Weak(_) => format!("~{}", self.weak.get_or_insert(id)),
             TypeVar::Link(_) => unreachable!("Link should be resolved before naming"),
         }

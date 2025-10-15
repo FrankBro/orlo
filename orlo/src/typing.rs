@@ -102,45 +102,11 @@ pub fn replace_ty_constants_with_vars(env: &HashMap<String, Type>, ty: Type) -> 
     }
 }
 
-#[derive(Default, Clone, Debug)]
-pub struct Constraints {
-    constraints: Vec<String>,
-}
-
-impl From<Vec<String>> for Constraints {
-    fn from(constraints: Vec<String>) -> Self {
-        Constraints { constraints }
-    }
-}
-
-impl Constraints {
-    pub fn union(mut self, other: Self) -> Self {
-        for constraint in &other.constraints {
-            if !self.constraints.contains(constraint) {
-                self.constraints.push(constraint.clone());
-            }
-        }
-        self
-    }
-
-    pub fn contains(&self, constraint: &String) -> bool {
-        self.constraints.contains(constraint)
-    }
-
-    pub fn from_label(label: &str) -> Self {
-        Constraints {
-            constraints: vec![label.to_string()],
-        }
-    }
-}
-
 #[derive(Clone, Debug)]
 pub enum TypeVar {
     Unbound(Level),
-    UnboundRow(Level, Constraints),
     Link(Type),
     Generic,
-    GenericRow(Constraints),
     // For things like a mutable empty array that'll be filled later
     Weak(Level),
 }
