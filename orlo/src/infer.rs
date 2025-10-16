@@ -423,6 +423,7 @@ impl Env {
 
     fn infer(&mut self, level: Level, val: &Value) -> Result<Type> {
         match val {
+            Value::Datum(_) => Ok(Type::Const("datum".to_owned())),
             Value::Atom(name) => {
                 let ty = self.get_var(name)?;
                 self.instantiate(level, ty)
@@ -435,6 +436,7 @@ impl Env {
             Value::Record(vals) => self.infer_record(level, vals, None),
             Value::DottedRecord(vals, rest) => self.infer_record(level, vals, Some(rest)),
             Value::Variant(label, val) => self.infer_variant(level, label, val),
+            Value::DottedVariant(_, _) => unreachable!(),
             Value::List(vals) => match identify(vals)? {
                 Form::Append(vals) => {
                     let mut ty = Type::ListNil;

@@ -77,12 +77,14 @@ pub fn apply(env: &mut Env, val: &Value, args: &[Value]) -> Result<Value> {
 
 pub fn eval(env: &mut Env, val: &Value) -> Result<Value> {
     match val {
+        Value::Datum(_) => Ok(val.clone()),
         Value::String(_) => Ok(val.clone()),
         Value::Number(_) => Ok(val.clone()),
         Value::Bool(_) => Ok(val.clone()),
         Value::Atom(id) => env.get_var(id).cloned(),
         Value::Array(_) => Ok(val.clone()),
         Value::Variant(_, _) => Ok(val.clone()),
+        Value::DottedVariant(_, _) => unreachable!(),
         Value::Record(_) => Ok(val.clone()),
         Value::DottedRecord(vals, rest) => {
             let mut fields = match eval(env, &rest)? {
@@ -514,7 +516,7 @@ mod tests {
                 )),
             ),
             ("(string<? str \"The string\")", Ok("#t")),
-            ("(define (f x y) (+ x y))", Ok("(lambda (x y) ...)")),
+            ("(define (f x y) (+ x y))", Ok("(lambda (x y) 'body)")),
             ("(f 1 2)", Ok("3")),
             (
                 "(f 1 2 3)",
@@ -526,18 +528,18 @@ mod tests {
             ("(f 1)", Err(Error::NumArgs(2, vec![Value::Number(1)]))),
             (
                 "(define (factorial x) (if (= x 1) 1 (* x (factorial (- x 1)))))",
-                Ok("(lambda (x) ...)"),
+                Ok("(lambda (x) 'body)"),
             ),
             ("(factorial 10)", Ok("3628800")),
             (
                 "(define (counter inc) (lambda (x) (set! inc (+ x inc)) inc))",
-                Ok("(lambda (inc) ...)"),
+                Ok("(lambda (inc) 'body)"),
             ),
-            ("(define my-count (counter 5))", Ok("(lambda (x) ...)")),
+            ("(define my-count (counter 5))", Ok("(lambda (x) 'body)")),
             ("(my-count 3)", Ok("8")),
             ("(my-count 6)", Ok("14")),
             ("(my-count 5)", Ok("19")),
-            ("(load \"../stdlib.scm\")", Ok("(lambda (pred lst) ...)")),
+            ("(load \"../stdlib.scm\")", Ok("(lambda (pred lst) 'body)")),
             ("(map (curry + 2) '(1 2 3 4))", Ok("(3 4 5 6)")),
             ("(filter even? '(1 2 3 4))", Ok("(2 4)")),
         ];

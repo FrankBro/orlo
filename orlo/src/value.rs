@@ -47,6 +47,7 @@ pub enum IOFunc {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Value {
+    Datum(Box<Value>),
     Atom(String),
     List(Vec<Value>),
     DottedList(Vec<Value>, Box<Value>),
@@ -58,6 +59,8 @@ pub enum Value {
     Record(Vec<(String, Value)>),
     DottedRecord(Vec<(String, Value)>, Box<Value>),
     Variant(String, Box<Value>),
+    // TODO: Only used for open variant types, should I rethink this?
+    DottedVariant(Vec<(String, Value)>, Option<Box<Value>>),
     PrimitiveFunc(PrimitiveFunc),
     Func {
         params: Vec<String>,
@@ -78,11 +81,22 @@ impl Value {
 impl Display for Value {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Value::Datum(v) => write!(f, "#; {}", v),
             Value::String(s) => write!(f, "\"{}\"", s),
             Value::Atom(a) => write!(f, "{}", a),
             Value::Number(n) => write!(f, "{}", n),
             Value::Bool(b) => write!(f, "{}", if *b { TRUE } else { FALSE }),
             Value::List(l) => {
+                match l.as_slice() {
+                    [Value::Atom(s), rest @ ..] if s == QUOTE => {
+                        if rest.len() == 1 {
+                            return write!(f, "'{}", rest[0]);
+                        } else {
+                            return write!(f, "'({})", intersperse(rest));
+                        }
+                    }
+                    _ => {}
+                }
                 write!(f, "({})", intersperse(l))
             }
             Value::DottedList(xs, x) => {
@@ -103,7 +117,7 @@ impl Display for Value {
                     Some(arg) => format!(" . {}", arg),
                     None => String::new(),
                 };
-                write!(f, "(lambda ({}{}) ...)", params, vararg)
+                write!(f, "(lambda ({}{}) 'body)", params, vararg)
             }
             Value::IOFunc(_) => write!(f, "<IO primitive>"),
             Value::Port(_) => write!(f, "<IO port>"),
@@ -123,10 +137,22 @@ impl Display for Value {
                     write!(f, "{sep}.{key} {value}")?;
                     sep = " ";
                 }
-                write!(f, ". {rest}}}")
+                write!(f, " . {rest}}}")
             }
             Value::Variant(label, val) => {
                 write!(f, "(.{} {})", label, val)
+            }
+            Value::DottedVariant(pairs, rest) => {
+                write!(f, "(")?;
+                let mut sep = "";
+                for (key, value) in pairs {
+                    write!(f, "{sep}.{key} {value}")?;
+                    sep = " ";
+                }
+                match rest {
+                    None => write!(f, ")"),
+                    Some(rest) => write!(f, " . {rest})"),
+                }
             }
         }
     }

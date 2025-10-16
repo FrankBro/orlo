@@ -4,7 +4,7 @@ use crate::{
     eval::eval,
     expander::Expander,
     infer,
-    parser::parse,
+    parser::{parse, parse_multiple},
     value::Value,
 };
 
@@ -18,8 +18,8 @@ pub enum Error {
 type Result<T, E = Error> = std::result::Result<T, E>;
 
 pub struct The {
-    ty: String,
-    value: String,
+    pub ty: String,
+    pub value: String,
 }
 
 impl std::fmt::Display for The {
@@ -60,5 +60,21 @@ impl Repl {
             ty,
             value: evaluated.to_string(),
         })
+    }
+
+    pub fn handle_file(&mut self, path: &str) -> Result<Vec<The>, Error> {
+        let content = std::fs::read_to_string(path).map_err(|_| Error::Parse)?;
+        let values = parse_multiple(&content).map_err(|_| Error::Parse)?;
+        let mut output = Vec::new();
+        for value in values {
+            let expanded = self.expander.expand(&value).map_err(|_e| Error::Parse)?;
+            let ty = self.get_type(&expanded).map_err(Error::Infer)?;
+            let evaluated = eval(&mut self.eval, &expanded).map_err(Error::Eval)?;
+            output.push(The {
+                ty,
+                value: evaluated.to_string(),
+            });
+        }
+        Ok(output)
     }
 }

@@ -48,6 +48,10 @@ pub enum Token<'a> {
     LCurly,
     #[token("}")]
     RCurly,
+    #[regex(r";[^\n\r]*", logos::skip)]
+    Comment,
+    #[token("#;")]
+    Datum,
 }
 
 fn parser<'tokens, 'src: 'tokens, I>()
@@ -138,9 +142,26 @@ where
             })
             .labelled("record");
         let variant = long_label
+            .clone()
             .map(|(label, val)| Value::Variant(label, Box::new(val)))
             .delimited_by(just(Token::LParen), just(Token::RParen))
             .labelled("variant");
+        let dotted_variant = long_label
+            .repeated()
+            .collect::<Vec<_>>()
+            .then(
+                just(Token::Dot)
+                    .ignore_then(sexpr.clone())
+                    .or_not()
+                    .map(|opt| opt.map(Box::new)),
+            )
+            .delimited_by(just(Token::LParen), just(Token::RParen))
+            .map(|(fields, rest)| Value::DottedVariant(fields, rest))
+            .labelled("dotted variant");
+        let datum = just(Token::Datum)
+            .ignore_then(sexpr.clone())
+            .map(|v| Value::Datum(Box::new(v)))
+            .labelled("datum");
         bool.or(atom)
             .or(string)
             .or(number)
@@ -153,6 +174,8 @@ where
             .or(record)
             .or(access)
             .or(variant)
+            .or(datum)
+            .or(dotted_variant)
     })
 }
 
@@ -359,16 +382,16 @@ mod tests {
     #[test]
     fn quasiquote_expansion() {
         let cases = vec![
-            ("`a", "(quote a)"),
+            ("`a", "'a"),
             ("`(1 2 3)", "(list 1 2 3)"),
             ("(let ((x 10)) `(1 ,x 3))", "(let ((x 10)) (list 1 x 3))"),
             (
                 "(let ((x 1) (y 2)) ``(a ,x ,(list ,y 3)))",
-                "(let ((x 1) (y 2)) (list (quote a) x (list y 3)))",
+                "(let ((x 1) (y 2)) (list 'a x (list y 3)))",
             ),
             (
                 "(let ((lst '(2 3))) `(1 ,@lst 4))",
-                "(let ((lst (quote (2 3)))) (append (list 1) lst (list 4)))",
+                "(let ((lst '(2 3))) (append (list 1) lst (list 4)))",
             ),
         ];
         for (input, expected) in cases {
