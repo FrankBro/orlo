@@ -15,6 +15,16 @@ pub enum Error {
     Infer(infer::Error),
 }
 
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Error::Parse => write!(f, "Parse error"),
+            Error::Eval(e) => write!(f, "{e}"),
+            Error::Infer(e) => write!(f, "{e}"),
+        }
+    }
+}
+
 type Result<T, E = Error> = std::result::Result<T, E>;
 
 pub struct The {
@@ -51,9 +61,8 @@ impl Repl {
         self.infer.ty_to_string(&ty)
     }
 
-    pub fn handle_input(&mut self, input: &str) -> Result<The, Error> {
-        let value = parse(input).map_err(|_| Error::Parse)?;
-        let expanded = self.expander.expand(&value).map_err(|_e| Error::Parse)?;
+    fn handle_value(&mut self, value: &Value) -> Result<The, Error> {
+        let expanded = self.expander.expand(value).map_err(|_e| Error::Parse)?;
         let ty = self.get_type(&expanded).map_err(Error::Infer)?;
         let evaluated = eval(&mut self.eval, &expanded).map_err(Error::Eval)?;
         Ok(The {
@@ -62,18 +71,18 @@ impl Repl {
         })
     }
 
-    pub fn handle_file(&mut self, path: &str) -> Result<Vec<The>, Error> {
+    pub fn handle_input(&mut self, input: &str) -> Result<The, Error> {
+        let value = parse(input).map_err(|_| Error::Parse)?;
+        self.handle_value(&value)
+    }
+
+    pub fn handle_file(&mut self, path: &str) -> Result<Vec<Result<The, Error>>, Error> {
         let content = std::fs::read_to_string(path).map_err(|_| Error::Parse)?;
         let values = parse_multiple(&content).map_err(|_| Error::Parse)?;
         let mut output = Vec::new();
         for value in values {
-            let expanded = self.expander.expand(&value).map_err(|_e| Error::Parse)?;
-            let ty = self.get_type(&expanded).map_err(Error::Infer)?;
-            let evaluated = eval(&mut self.eval, &expanded).map_err(Error::Eval)?;
-            output.push(The {
-                ty,
-                value: evaluated.to_string(),
-            });
+            let res = self.handle_value(&value);
+            output.push(res);
         }
         Ok(output)
     }

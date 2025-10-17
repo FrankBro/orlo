@@ -35,6 +35,32 @@ pub enum Error {
     Form(identifier::Error),
 }
 
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Error::TypeVarNotFound(_) => todo!(),
+            Error::VarNotFound(var) => write!(f, "Unbound variable: {var}"),
+            Error::BadSpecialForm(_, _value) => todo!(),
+            Error::UnexpectedNumberOfArguments { .. } => todo!(),
+            Error::ExpectedAFunction(_) => todo!(),
+            Error::RecursiveType => todo!(),
+            Error::CannotUnify(_, _) => todo!(),
+            Error::FunctionArgNotSymbol(_) => todo!(),
+            Error::IO(_error_kind) => todo!(),
+            Error::Parser => todo!(),
+            Error::DefineMacroNotSymbol(_value) => todo!(),
+            Error::DefineFunctionNotSymbol(_value) => todo!(),
+            Error::MissingLabel(_) => todo!(),
+            Error::CannotInjectConstraintsInto(_) => todo!(),
+            Error::ExpectedARow(_) => todo!(),
+            Error::RowConstraintFailed(_) => todo!(),
+            Error::RecursiveRowType => todo!(),
+            Error::NoSuchField(_, _value) => todo!(),
+            Error::Form(_error) => todo!(),
+        }
+    }
+}
+
 impl From<identifier::Error> for Error {
     fn from(error: identifier::Error) -> Self {
         Error::Form(error)
