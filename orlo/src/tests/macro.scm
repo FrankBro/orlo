@@ -31,3 +31,11 @@
 #; (the int 12)
 (when #f (+ 1 2))
 #; (the int 0)
+
+; expand
+(expand (square 3))
+#; (the (symbol int int) (* 3 3))
+(expand (unless #f 1 2))
+#; (the (symbol bool int int) (if #f 2 1))
+(expand (when #t (+ 1 2) (* 3 4)))
+#; (the (symbol bool int int) (if #t (begin (+ 1 2) (* 3 4)) 0))

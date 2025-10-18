@@ -87,6 +87,49 @@ impl Expander {
                     self.define_macro(params, vararg, body)?;
                     return Ok(expr.clone());
                 }
+                [Value::Atom(atom), val] if atom == "expand" => {
+                    // Expand the argument and return it quoted
+                    let expanded = match val {
+                        Value::List(inner_vals) => match &inner_vals[..] {
+                            [Value::Atom(name), args @ ..] if self.macros.contains_key(name) => {
+                                let macro_def = self.macros.get(name).expect("Macro should exist");
+
+                                if args.len() < macro_def.params.len() {
+                                    return Err(Error::MacroTooFewArguments {
+                                        name: name.to_owned(),
+                                        minimum: macro_def.params.len(),
+                                        got: args.len(),
+                                    });
+                                }
+
+                                let mut env = Env::default();
+                                let args = match macro_def.vararg.as_ref() {
+                                    Some(name) => {
+                                        let (fixed_args, vararg_vals) =
+                                            args.split_at(macro_def.params.len());
+                                        let vararg_vals = Value::List(vararg_vals.to_vec());
+                                        env.define_var(name.to_owned(), vararg_vals);
+                                        fixed_args
+                                    }
+                                    None => args,
+                                };
+                                for (param, arg) in macro_def.params.iter().zip(args.iter()) {
+                                    env.define_var(param.clone(), arg.clone());
+                                }
+
+                                // Evaluate the macro body to get the expansion
+                                eval(&mut env, &macro_def.body).map_err(Error::MacroExpansion)?
+                            }
+                            _ => val.clone(),
+                        },
+                        _ => val.clone(),
+                    };
+                    // Return the expansion wrapped in a quote
+                    return Ok(Value::List(vec![
+                        Value::Atom("quote".to_string()),
+                        expanded,
+                    ]));
+                }
                 [Value::Atom(name), args @ ..] if self.macros.contains_key(name) => {
                     let macro_def = self.macros.get(name).expect("Macro should exist");
 

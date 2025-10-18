@@ -581,7 +581,11 @@ impl Env {
                     Value::List(vals) => {
                         let mut ty = Type::ListNil;
                         for val in vals.iter().rev() {
-                            let head = self.infer(level, val)?;
+                            let head = match val {
+                                // Atoms in quoted lists are symbols, not variables to look up
+                                Value::Atom(_) => Type::Const(SYMBOL.to_owned()),
+                                other => self.infer(level, other)?,
+                            };
                             ty = Type::ListCons(Box::new(head), Box::new(ty));
                         }
                         Ok(ty)
@@ -966,7 +970,7 @@ impl Env {
                                 ty_str.push(' ');
                             }
                             let vararg = self.ty_to_string_impl(namer, vararg)?;
-                            ty_str.push_str(&format!(". {}", vararg));
+                            ty_str.push_str(&format!(" . {}", vararg));
                             break;
                         }
                         Type::ListNil => break,
