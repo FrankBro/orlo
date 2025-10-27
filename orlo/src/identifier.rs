@@ -14,6 +14,7 @@ pub enum Access<'a> {
 }
 
 pub enum Form<'a> {
+    The(&'a Value, &'a Value),
     Append(&'a [Value]),
     List(&'a [Value]),
     Access(&'a Value, Vec<Access<'a>>),
@@ -82,6 +83,7 @@ pub enum Form<'a> {
 
 pub fn identify<'a>(vals: &'a [Value]) -> Result<Form<'a>> {
     match vals {
+        [Value::Atom(atom), ty, val] if atom == "the" => Ok(Form::The(ty, val)),
         [Value::Atom(atom), val] if atom == "quote" => Ok(Form::Quote(val)),
         [Value::Atom(atom), body @ ..] if atom == "begin" => Ok(Form::Begin(body)),
         [Value::Atom(atom), Value::List(params), body] if atom == "define-macro" => {

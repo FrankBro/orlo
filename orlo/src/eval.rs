@@ -106,6 +106,7 @@ pub fn eval(env: &mut Env, val: &Value) -> Result<Value> {
             Ok(Value::Record(fields))
         }
         Value::List(vals) => match identify(vals)? {
+            Form::The(_, val) => eval(env, val),
             Form::Append(vals) => {
                 let mut result = Vec::new();
                 for val in vals {

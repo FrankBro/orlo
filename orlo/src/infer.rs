@@ -40,7 +40,7 @@ impl std::fmt::Display for Error {
         match self {
             Error::TypeVarNotFound(_) => todo!(),
             Error::VarNotFound(var) => write!(f, "Unbound variable: {var}"),
-            Error::BadSpecialForm(_, _value) => todo!(),
+            Error::BadSpecialForm(text, _value) => write!(f, "{text}"),
             Error::UnexpectedNumberOfArguments { .. } => todo!(),
             Error::ExpectedAFunction(_) => todo!(),
             Error::RecursiveType => todo!(),
@@ -464,6 +464,25 @@ impl Env {
             Value::Variant(label, val) => self.infer_variant(level, label, val),
             Value::DottedVariant(_, _) => unreachable!(),
             Value::List(vals) => match identify(vals)? {
+                Form::The(expected, val) => {
+                    let val_ty = self.infer(level, val)?;
+                    let expected = expected.to_string();
+                    // replace unbound and weak type vars
+                    let actual = self
+                        .ty_to_string(&val_ty)?
+                        .replace("_", "")
+                        .replace("~", "");
+                    if expected != actual {
+                        return Err(Error::BadSpecialForm(
+                            format!(
+                                "the expected type '{}' does not match the inferred type '{}'",
+                                expected, actual
+                            ),
+                            val.clone(),
+                        ));
+                    }
+                    Ok(val_ty)
+                }
                 Form::Append(vals) => {
                     let mut ty = Type::ListNil;
 
