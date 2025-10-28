@@ -71,6 +71,12 @@ pub fn apply(env: &mut Env, val: &Value, args: &[Value]) -> Result<Value> {
             }
             ret.ok_or(Error::EmptyBody)
         }
+        Value::ForeignFunc(fun) => {
+            if args.len() != fun.arity {
+                return Err(Error::NumArgs(fun.arity, args.to_vec()));
+            }
+            (fun.handler)(args)
+        }
         _ => Err(Error::NotFunction(val.clone())),
     }
 }
@@ -464,6 +470,7 @@ pub fn eval(env: &mut Env, val: &Value) -> Result<Value> {
         } => todo!(),
         Value::IOFunc(_iofunc) => todo!(),
         Value::Port(_) => todo!(),
+        Value::ForeignFunc { .. } => Ok(val.clone()),
     }
 }
 

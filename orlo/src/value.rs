@@ -1,6 +1,6 @@
-use std::fmt::Display;
+use std::{fmt::Display, sync::Arc};
 
-use crate::{env::Closure, util::intersperse};
+use crate::{env::Closure, error::Error, util::intersperse};
 
 pub static QUOTE: &str = "quote";
 pub static TRUE: &str = "#t";
@@ -70,7 +70,35 @@ pub enum Value {
     },
     IOFunc(IOFunc),
     Port(usize),
+    ForeignFunc(ForeignFunc),
 }
+
+#[derive(Clone)]
+pub struct ForeignFunc {
+    pub name: String,
+    pub arity: usize,
+    pub handler: Arc<dyn Fn(&[Value]) -> Result<Value, Error> + Send + Sync>,
+}
+
+impl std::fmt::Debug for ForeignFunc {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "<foreign:{}>", self.name)
+    }
+}
+
+impl std::fmt::Display for ForeignFunc {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "<foreign:{}>", self.name)
+    }
+}
+
+impl PartialEq for ForeignFunc {
+    fn eq(&self, other: &Self) -> bool {
+        self.name == other.name && self.arity == other.arity
+    }
+}
+
+impl Eq for ForeignFunc {}
 
 impl Value {
     pub fn quote(&self) -> Self {
@@ -121,6 +149,7 @@ impl Display for Value {
             }
             Value::IOFunc(_) => write!(f, "<IO primitive>"),
             Value::Port(_) => write!(f, "<IO port>"),
+            Value::ForeignFunc(fun) => write!(f, "{fun}"),
             Value::Record(pairs) => {
                 write!(f, "{{")?;
                 let mut sep = "";

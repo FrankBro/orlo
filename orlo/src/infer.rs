@@ -71,7 +71,7 @@ type Result<T> = std::result::Result<T, Error>;
 
 #[derive(Default, Clone)]
 pub struct Env {
-    vars: HashMap<String, Type>,
+    pub vars: HashMap<String, Type>,
     tvars: Vec<TypeVar>,
 }
 
@@ -794,6 +794,11 @@ impl Env {
             } => todo!(),
             Value::IOFunc(_iofunc) => todo!(),
             Value::Port(_) => todo!(),
+            Value::ForeignFunc(fun) => {
+                // Foreign functions should already be registered in the environment
+                let ty = self.get_var(&fun.name)?;
+                self.instantiate(level, ty)
+            }
         }
     }
 
