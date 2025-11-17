@@ -81,15 +81,19 @@ impl Repl {
         self.handle_value(&value)
     }
 
-    pub fn handle_file(&mut self, path: &str) -> Result<Vec<Result<The, Error>>, Error> {
-        let content = std::fs::read_to_string(path).map_err(|_| Error::Parse)?;
-        let values = parse_multiple(&content).map_err(|_| Error::Parse)?;
+    pub fn handle_inputs(&mut self, input: &str) -> Result<Vec<Result<The, Error>>, Error> {
+        let values = parse_multiple(&input).map_err(|_| Error::Parse)?;
         let mut output = Vec::new();
         for value in values {
             let res = self.handle_value(&value);
             output.push(res);
         }
         Ok(output)
+    }
+
+    pub fn handle_file(&mut self, path: &str) -> Result<Vec<Result<The, Error>>, Error> {
+        let input = std::fs::read_to_string(path).map_err(|_| Error::Parse)?;
+        self.handle_inputs(&input)
     }
 
     /// Create a builder for registering a foreign function
