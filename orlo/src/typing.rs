@@ -15,7 +15,7 @@ pub enum Type {
     App(Box<Type>, Vec<Type>),
     // This is syntactic sugar for App(Const("array"), [ty])
     Array(Box<Type>),
-    Arrow(Box<Type>, Box<Type>), // params (list) + vararg + ret
+    Arrow(Box<Type>, Box<Type>), // params (list) + ret
     Var(Id),
     // List
     ListNil,

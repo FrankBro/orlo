@@ -633,12 +633,10 @@ impl Env {
                     let lines =
                         std::fs::read_to_string(filename).map_err(|e| Error::IO(e.kind()))?;
                     let vals = parse_multiple(&lines).map_err(|_| Error::Parser)?;
-                    let mut ret = None;
                     for val in vals {
-                        let body_ty = self.infer(level, &val)?;
-                        ret = Some(body_ty);
+                        self.infer(level, &val)?;
                     }
-                    Ok(ret.unwrap_or(Type::Const("void".to_owned())))
+                    Ok(Type::Const("void".to_owned()))
                 }
                 Form::Let {
                     name,

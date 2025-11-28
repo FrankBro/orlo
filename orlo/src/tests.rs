@@ -1,5 +1,5 @@
 #[test]
-fn tests() {
+fn file_tests() {
     use crate::repl::{self, Repl, The};
     // find all the .scm files from the tests subfolder
     // split every 3 lines: input, expected output, empty line
@@ -36,9 +36,22 @@ fn tests() {
                                     );
                                     count += 1;
                                 }
-                                None => unreachable!(),
+                                None => panic!(
+                                    "Impossible: {:?}, {:?} and last {:?}",
+                                    path.to_str(),
+                                    the,
+                                    last_the
+                                ),
                             }
                         } else {
+                            if last_the.map(|val| val.is_err()).unwrap_or(false) {
+                                panic!(
+                                    "expected error, got type {} with value {} in file: {}",
+                                    the.ty,
+                                    the.value,
+                                    path.display()
+                                );
+                            }
                             last_the = Some(Ok(the));
                         }
                     }

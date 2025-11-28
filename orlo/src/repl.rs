@@ -32,6 +32,7 @@ impl std::error::Error for Error {}
 
 type Result<T, E = Error> = std::result::Result<T, E>;
 
+#[derive(Debug)]
 pub struct The {
     pub ty: String,
     pub value: String,
